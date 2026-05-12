@@ -1,0 +1,264 @@
+.crz-auth-page {
+  min-height: 100vh;
+  background: #ffffff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 18px;
+}
+
+.crz-auth-card {
+  width: 100%;
+  max-width: 430px;
+  min-height: calc(100vh - 36px);
+  background: #ffffff;
+  border: 1px solid #ececec;
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.04);
+  overflow: hidden;
+  padding: 18px 20px 22px;
+  display: flex;
+  flex-direction: column;
+}
+
+.crz-top-hero {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  padding-top: 2px;
+}
+
+.crz-top-hero-image {
+  width: min(150px, 72%);
+  height: auto;
+  object-fit: contain;
+  display: block;
+}
+
+.crz-brand-row {
+  display: flex;
+  justify-content: center;
+  margin-top: 6px;
+}
+
+.crz-brand-logo-image {
+  width: min(180px, 76%);
+  height: auto;
+  object-fit: contain;
+  display: block;
+}
+
+.crz-brand-logo-image.bounce-logo {
+  width: min(190px, 80%);
+}
+
+.crz-brand-logo-image.crunzzo-logo {
+  width: min(150px, 68%);
+}
+
+.crz-welcome-copy {
+  text-align: center;
+  margin-top: 8px;
+  margin-bottom: 16px;
+}
+
+.crz-welcome-copy p {
+  margin: 0;
+  font-size: 13px;
+  color: #7d879b;
+  font-weight: 500;
+}
+
+.crz-form {
+  display: grid;
+  gap: 14px;
+}
+
+.crz-field {
+  display: grid;
+  gap: 8px;
+}
+
+.crz-field label {
+  font-size: 12px;
+  font-weight: 800;
+  color: #20263a;
+}
+
+.crz-field input {
+  width: 100%;
+  height: 46px;
+  border: 1px solid #d7dde8;
+  border-radius: 14px;
+  background: #ffffff;
+  padding: 0 14px;
+  font-size: 14px;
+  color: #273043;
+  outline: none;
+  transition: 0.2s ease;
+}
+
+.crz-field input::placeholder {
+  color: #a0a8b8;
+}
+
+.crz-auth-page.orange .crz-field input:focus {
+  border-color: #ef6a1d;
+  box-shadow: 0 0 0 3px rgba(239, 106, 29, 0.08);
+}
+
+.crz-auth-page.blue .crz-field input:focus {
+  border-color: #53b6e2;
+  box-shadow: 0 0 0 3px rgba(83, 182, 226, 0.08);
+}
+
+.crz-auth-page.red .crz-field input:focus {
+  border-color: #ea2a2a;
+  box-shadow: 0 0 0 3px rgba(234, 42, 42, 0.08);
+}
+
+.crz-password-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.crz-forgot-btn,
+.crz-bottom-link {
+  border: none;
+  background: transparent;
+  padding: 0;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.crz-auth-page.orange .crz-forgot-btn,
+.crz-auth-page.orange .crz-bottom-link {
+  color: #ef6a1d;
+}
+
+.crz-auth-page.blue .crz-forgot-btn,
+.crz-auth-page.blue .crz-bottom-link {
+  color: #53b6e2;
+}
+
+.crz-auth-page.red .crz-forgot-btn,
+.crz-auth-page.red .crz-bottom-link {
+  color: #ea2a2a;
+}
+
+.crz-error {
+  border: 1px solid #ffd5d5;
+  background: #fff3f3;
+  color: #d42424;
+  border-radius: 12px;
+  padding: 10px 12px;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.crz-login-btn {
+  width: 100%;
+  height: 44px;
+  border: none;
+  border-radius: 14px;
+  color: #ffffff;
+  font-size: 14px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.crz-auth-page.orange .crz-login-btn {
+  background: linear-gradient(180deg, #ff8f3f 0%, #ef6a1d 100%);
+}
+
+.crz-auth-page.blue .crz-login-btn {
+  background: linear-gradient(180deg, #63c0e8 0%, #45aedc 100%);
+}
+
+.crz-auth-page.red .crz-login-btn {
+  background: linear-gradient(180deg, #ff3f3f 0%, #e11919 100%);
+}
+
+.crz-login-btn:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
+.crz-divider {
+  position: relative;
+  text-align: center;
+  margin: 2px 0;
+}
+
+.crz-divider::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: 1px;
+  background: #e5e9f0;
+}
+
+.crz-divider span {
+  position: relative;
+  background: #ffffff;
+  padding: 0 10px;
+  color: #9aa3b2;
+  font-size: 12px;
+}
+
+.crz-social-stack {
+  display: grid;
+  gap: 10px;
+}
+
+.crz-social-btn {
+  width: 100%;
+  height: 44px;
+  border: 1px solid #d7dde8;
+  background: #ffffff;
+  border-radius: 14px;
+  color: #273043;
+  font-size: 13px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  cursor: pointer;
+}
+
+.crz-social-svg {
+  width: 19px;
+  height: 19px;
+  flex-shrink: 0;
+}
+
+.crz-bottom-switch {
+  margin-top: auto;
+  padding-top: 16px;
+  text-align: center;
+  color: #7d879b;
+  font-size: 12px;
+}
+
+.crz-bottom-switch span {
+  margin-right: 4px;
+}
+
+@media (max-width: 480px) {
+  .crz-auth-page {
+    padding: 0;
+    background: #ffffff;
+  }
+
+  .crz-auth-card {
+    max-width: none;
+    min-height: 100vh;
+    border: none;
+    box-shadow: none;
+  }
+}
