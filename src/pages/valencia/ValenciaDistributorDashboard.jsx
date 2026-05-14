@@ -876,7 +876,7 @@ export default function ValenciaDistributorDashboard() {
   const handleLogout = async () => {
     try {
       await signOut(auth);
-      navigate("/login?section=drinkvalencia", { replace: true });
+      navigate("/login?section=valencia", { replace: true });
     } catch (error) {
       console.error("Logout error:", error);
       setProfileMessage("Failed to logout.");
@@ -886,15 +886,25 @@ export default function ValenciaDistributorDashboard() {
   const addToCart = (productId, optionId) => {
     const cartKey = `${productId}_${optionId}`;
     const product = products.find((item) => item.id === productId);
-    const availableStock = Number(product?.[`stock_${optionId}`] || 0);
+    const opt = VALENCIA_OPTIONS.find(o => o.id === optionId);
+    if (!product || !opt) return;
+
+    const totalCans = Number(product.stock || 0);
+    const cansNeededForOne = opt.count;
 
     setCart((prev) => {
-      const currentQty = Number(prev[cartKey] || 0);
-      if (availableStock <= 0 || currentQty >= availableStock) return prev;
+      // Calculate total cans already in cart for this product
+      let cansInCart = 0;
+      VALENCIA_OPTIONS.forEach(o => {
+        const k = `${productId}_${o.id}`;
+        cansInCart += (prev[k] || 0) * o.count;
+      });
+
+      if (totalCans <= 0 || (cansInCart + cansNeededForOne) > totalCans) return prev;
 
       return {
         ...prev,
-        [cartKey]: currentQty + 1,
+        [cartKey]: (prev[cartKey] || 0) + 1,
       };
     });
   };
@@ -1068,55 +1078,34 @@ export default function ValenciaDistributorDashboard() {
       };
 
       const orderRef = doc(collection(db, "orders"));
-      const stockRequestsByProduct = selectedItems.reduce((map, item) => {
-        const productId = item.id;
-        const existing = map.get(productId) || {
-          productRef: doc(db, "products", productId),
-          requests: [],
-        };
 
-        existing.requests.push({
-          name: item.name || "Product",
-          optionLabel: item.optionLabel || item.optionId,
-          stockKey: `stock_${item.optionId}`,
-          quantity: Number(item.quantity || 0),
-        });
-        map.set(productId, existing);
+      // Group items by product for bulk stock deduction
+      const productDeductions = selectedItems.reduce((map, item) => {
+        map[item.id] = (map[item.id] || 0) + (item.quantity * item.unitCount);
         return map;
-      }, new Map());
+      }, {});
 
       await runTransaction(db, async (transaction) => {
-        const productSnapshots = [];
+        const productIds = Object.keys(productDeductions);
+        const snapshots = [];
 
-        for (const { productRef, requests } of stockRequestsByProduct.values()) {
-          const productSnap = await transaction.get(productRef);
-          productSnapshots.push({ productRef, requests, productSnap });
+        for (const pid of productIds) {
+          const snap = await transaction.get(doc(db, "products", pid));
+          if (!snap.exists()) throw new Error("Product data missing.");
+          snapshots.push(snap);
         }
 
-        for (const { productRef, requests, productSnap } of productSnapshots) {
-          if (!productSnap.exists()) {
-            throw new Error(`${requests[0]?.name || "Product"} is no longer available.`);
+        for (const snap of snapshots) {
+          const currentStock = Number(snap.data().stock || 0);
+          const toDeduct = productDeductions[snap.id];
+
+          if (currentStock < toDeduct) {
+            throw new Error(`Insufficient stock for ${snap.data().name}.`);
           }
 
-          const currentData = productSnap.data();
-          const nextData = { ...currentData };
-          const updateData = {};
-
-          requests.forEach((request) => {
-            const currentStock = Number(nextData[request.stockKey] || 0);
-            if (currentStock < request.quantity) {
-              throw new Error(
-                `Only ${currentStock} left for ${request.name} (${request.optionLabel}).`
-              );
-            }
-
-            const nextStock = currentStock - request.quantity;
-            nextData[request.stockKey] = nextStock;
-            updateData[request.stockKey] = nextStock;
+          transaction.update(snap.ref, {
+            stock: currentStock - toDeduct
           });
-
-          updateData.stock = getTotalRemainingUnits(nextData);
-          transaction.update(productRef, updateData);
         }
 
         transaction.set(orderRef, orderPayload);
@@ -1814,7 +1803,7 @@ export default function ValenciaDistributorDashboard() {
                 {filteredProducts.map((product) => {
                   const productInCart = selectedItems.filter(si => si.id === product.id);
                   const totalProductQty = productInCart.reduce((s, i) => s + i.quantity, 0);
-                  const isOutOfStock = VALENCIA_OPTIONS.every(opt => Number(product[`stock_${opt.id}`] || 0) <= 0);
+                  const isOutOfStock = Number(product.stock || 0) <= 0;
 
                   return (
                     <div className="vld-product-card" key={product.id} style={{ opacity: isOutOfStock ? 0.6 : 1 }}>
@@ -1893,8 +1882,19 @@ export default function ValenciaDistributorDashboard() {
                     const qty = cart[cartKey] || 0;
                     const baseRate = Number(selectedProductForOptionsLive.rate || selectedProductForOptionsLive.price || 0);
                     const itemPrice = baseRate * opt.count;
-                    const stockKey = `stock_${opt.id}`;
-                    const availableStock = Number(selectedProductForOptionsLive[stockKey] || 0);
+
+                    const totalCans = Number(selectedProductForOptionsLive.stock || 0);
+
+                    // Cans already used in cart for other variants of THIS product
+                    let cansInCartOther = 0;
+                    VALENCIA_OPTIONS.forEach(o => {
+                      if (o.id !== opt.id) {
+                        cansInCartOther += (cart[`${selectedProductForOptionsLive.id}_${o.id}`] || 0) * o.count;
+                      }
+                    });
+
+                    const remainingCans = totalCans - cansInCartOther;
+                    const availableStock = Math.floor(remainingCans / opt.count);
 
                     return (
                       <div className="vld-option-row" key={opt.id}>
@@ -1905,7 +1905,7 @@ export default function ValenciaDistributorDashboard() {
                           <span className="vld-option-label">{opt.label}</span>
                           <span className="vld-option-price">₹{itemPrice}</span>
                           <div style={{ fontSize: 10, color: availableStock <= 0 ? "#ff4d4f" : "#52c41a", fontWeight: 600 }}>
-                            {availableStock > 0 ? `In Stock: ${availableStock}` : "Out of Stock"}
+                            {availableStock > 0 ? `Available: ${availableStock}` : "Out of Stock"}
                           </div>
                         </div>
 

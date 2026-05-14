@@ -12,7 +12,7 @@ import {
   updateDoc,
 } from "firebase/firestore";
 import { getDownloadURL, ref, uploadBytes } from "firebase/storage";
-import valenciaLogo from "../../assets/05547902525dba681f4006d28f9e8e20b12b1f5b (1).jpg";
+import valenciaLogo from "../../assets/drink-valencia-logo.jpg";
 import { getFirebaseServices } from "../../firebase";
 
 const { auth, db, storage } = getFirebaseServices("valencia");
@@ -181,7 +181,6 @@ export default function ValenciaAdminDashboard() {
 
   const [inventorySearch, setInventorySearch] = useState("");
   const [salesSearch, setSalesSearch] = useState("");
-  const [selectedVariantIds, setSelectedVariantIds] = useState({});
 
   const [savingProduct, setSavingProduct] = useState(false);
   const [productMessage, setProductMessage] = useState("");
@@ -201,11 +200,6 @@ export default function ValenciaAdminDashboard() {
     lowStockThreshold: "20",
     category: "Energy Drinks",
     zones: [],
-    stock_1x250: "0",
-    stock_4x250: "0",
-    stock_6x250: "0",
-    stock_12x250: "0",
-    stock_24x250: "0",
   });
 
   useEffect(() => {
@@ -266,12 +260,7 @@ export default function ValenciaAdminDashboard() {
   const inventoryValue = useMemo(
     () =>
       products.reduce((acc, item) => {
-        let productVal = 0;
-        VALENCIA_OPTIONS.forEach(opt => {
-          const qty = Number(item[`stock_${opt.id}`] || 0);
-          productVal += qty * Number(item.rate || 0) * opt.count;
-        });
-        return acc + productVal;
+        return acc + Number(item.stock || 0) * Number(item.rate || 0);
       }, 0),
     [products]
   );
@@ -279,11 +268,7 @@ export default function ValenciaAdminDashboard() {
   const lowStockCount = useMemo(
     () =>
       products.filter((item) => {
-        let totalStockUnits = 0;
-        VALENCIA_OPTIONS.forEach((opt) => {
-          totalStockUnits += Number(item[`stock_${opt.id}`] || 0) * opt.count;
-        });
-        return totalStockUnits <= Number(item.lowStockThreshold || 20);
+        return Number(item.stock || 0) <= Number(item.lowStockThreshold || 20);
       }).length,
     [products]
   );
@@ -386,11 +371,6 @@ export default function ValenciaAdminDashboard() {
       lowStockThreshold: "20",
       category: "Energy Drinks",
       zones: [],
-      stock_1x250: "0",
-      stock_4x250: "0",
-      stock_6x250: "0",
-      stock_12x250: "0",
-      stock_24x250: "0",
     });
     setImageFile(null);
     setImagePreview("");
@@ -426,13 +406,7 @@ export default function ValenciaAdminDashboard() {
       await uploadBytes(storageRef, imageFile);
       const imageUrl = await getDownloadURL(storageRef);
 
-      const stocks = {};
-      let totalInitialStock = 0;
-      VALENCIA_OPTIONS.forEach((opt) => {
-        const val = Number(productForm[`stock_${opt.id}`] || 0);
-        stocks[`stock_${opt.id}`] = val;
-        totalInitialStock += val * opt.count;
-      });
+      const totalInitialStock = Number(productForm.stock || 0);
 
       await addDoc(collection(db, "products"), {
         name: productForm.name.trim(),
@@ -443,7 +417,6 @@ export default function ValenciaAdminDashboard() {
         skuCode: productForm.skuCode.trim(),
         unitLabel: productForm.unitLabel.trim() || "Units",
         stock: totalInitialStock,
-        ...stocks,
         openingStock: totalInitialStock,
         lowStockThreshold: Number(productForm.lowStockThreshold || 20),
         category: productForm.category,
@@ -465,28 +438,11 @@ export default function ValenciaAdminDashboard() {
     }
   };
 
-  const updateStock = async (product, delta, optionId) => {
-    if (!optionId) return;
-    const field = `stock_${optionId}`;
-    const nextStock = Math.max(0, Number(product[field] || 0) + delta);
-
-    // Calculate new total stock
-    let totalStock = 0;
-    VALENCIA_OPTIONS.forEach(opt => {
-      if (opt.id === optionId) {
-        totalStock += nextStock * opt.count;
-      } else {
-        totalStock += Number(product[`stock_${opt.id}`] || 0) * opt.count;
-      }
-    });
-
-    let updateData = {
-      [field]: nextStock,
-      stock: totalStock
-    };
+  const updateStock = async (product, delta) => {
+    const nextStock = Math.max(0, Number(product.stock || 0) + delta);
 
     try {
-      await updateDoc(doc(db, "products", product.id), updateData);
+      await updateDoc(doc(db, "products", product.id), { stock: nextStock });
     } catch (error) {
       console.error("Stock update failed:", error);
     }
@@ -695,13 +651,7 @@ export default function ValenciaAdminDashboard() {
                 />
                 <StatCard
                   title="Revenue Units"
-                  value={products.reduce((s, p) => {
-                    let total = 0;
-                    VALENCIA_OPTIONS.forEach((opt) => {
-                      total += Number(p[`stock_${opt.id}`] || 0) * opt.count;
-                    });
-                    return s + total;
-                  }, 0)}
+                  value={products.reduce((s, p) => s + Number(p.stock || 0), 0)}
                   subtitle="Total individual units"
                 />
               </div>
@@ -871,19 +821,11 @@ export default function ValenciaAdminDashboard() {
 
                       <div style={{ textAlign: "right" }}>
                         <div style={{ fontSize: 13, fontWeight: 800, color: TEXT }}>
-                          {(() => {
-                            let total = 0;
-                            VALENCIA_OPTIONS.forEach(opt => {
-                              total += Number(item[`stock_${opt.id}`] || 0) * opt.count;
-                            });
-                            return total;
-                          })()} Units
+                          {item.stock || 0} Units
                         </div>
                         <div style={{ fontSize: 11, color: BRAND }}>
                           {formatCompact(
-                            VALENCIA_OPTIONS.reduce((acc, opt) =>
-                              acc + (Number(item[`stock_${opt.id}`] || 0) * Number(item.rate || 0) * opt.count), 0
-                            )
+                            Number(item.stock || 0) * Number(item.rate || 0)
                           )} Total
                         </div>
                       </div>
@@ -1348,39 +1290,25 @@ export default function ValenciaAdminDashboard() {
                   </label>
 
                   <div style={{ marginTop: 8 }}>
-                    <span style={{ fontSize: 10, fontWeight: 700, color: MUTED }}>
-                      OPENING STOCK PER VARIANT
-                    </span>
-                    <div
-                      style={{
-                        display: "grid",
-                        gridTemplateColumns: "1fr 1fr",
-                        gap: 12,
-                        marginTop: 8,
-                      }}
-                    >
-                      {VALENCIA_OPTIONS.map((opt) => (
-                        <label key={opt.id} style={{ display: "grid", gap: 6 }}>
-                          <span style={{ fontSize: 10, fontWeight: 600, color: MUTED }}>
-                            {opt.label}
-                          </span>
-                          <input
-                            name={`stock_${opt.id}`}
-                            value={productForm[`stock_${opt.id}`]}
-                            onChange={handleProductInput}
-                            placeholder="0"
-                            style={{
-                              height: 44,
-                              borderRadius: 12,
-                              border: `1px solid ${BORDER}`,
-                              padding: "0 14px",
-                              outline: "none",
-                              background: "#fff",
-                            }}
-                          />
-                        </label>
-                      ))}
-                    </div>
+                    <label style={{ display: "grid", gap: 6 }}>
+                      <span style={{ fontSize: 10, fontWeight: 700, color: MUTED }}>
+                        OPENING STOCK (TOTAL CANS)
+                      </span>
+                      <input
+                        name="stock"
+                        value={productForm.stock}
+                        onChange={handleProductInput}
+                        placeholder="0"
+                        style={{
+                          height: 44,
+                          borderRadius: 12,
+                          border: `1px solid ${BORDER}`,
+                          padding: "0 14px",
+                          outline: "none",
+                          background: "#fff",
+                        }}
+                      />
+                    </label>
                   </div>
 
                   <label style={{ display: "grid", gap: 6, marginTop: 8 }}>
@@ -1584,69 +1512,67 @@ export default function ValenciaAdminDashboard() {
                         </div>
 
                         <div style={{ marginTop: 16, display: "grid", gap: 10 }}>
-                          <div style={{ fontSize: 11, fontWeight: 800, color: MUTED, letterSpacing: '0.05em' }}>SELECT VARIANT TO MANAGE STOCK</div>
-                          {(() => {
-                            const selectedOptId = selectedVariantIds[item.id] || VALENCIA_OPTIONS[0].id;
-                            const optStock = item[`stock_${selectedOptId}`] || 0;
+                          <div style={{ fontSize: 11, fontWeight: 800, color: MUTED, letterSpacing: '0.05em' }}>MANAGE TOTAL STOCK (CANS)</div>
+                          <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                            <div
+                              style={{
+                                flex: 1,
+                                height: 44,
+                                borderRadius: 12,
+                                border: `1px solid ${BORDER}`,
+                                display: 'flex',
+                                alignItems: 'center',
+                                padding: "0 12px",
+                                fontSize: 13,
+                                fontWeight: 700,
+                                background: "#fdfdfd",
+                                color: TEXT,
+                              }}
+                            >
+                              Current: {item.stock || 0} Cans
+                            </div>
 
-                            return (
-                              <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-                                <select
-                                  value={selectedOptId}
-                                  onChange={(e) => setSelectedVariantIds(prev => ({ ...prev, [item.id]: e.target.value }))}
-                                  style={{
-                                    flex: 1,
-                                    height: 44,
-                                    borderRadius: 12,
-                                    border: `1px solid ${BORDER}`,
-                                    padding: "0 12px",
-                                    fontSize: 13,
-                                    fontWeight: 700,
-                                    background: "#fff",
-                                    color: TEXT,
-                                    outline: "none",
-                                    cursor: "pointer"
-                                  }}
-                                >
-                                  {VALENCIA_OPTIONS.map(opt => (
-                                    <option key={opt.id} value={opt.id}>
-                                      {opt.label} (Stock: {item[`stock_${opt.id}`] || 0})
-                                    </option>
-                                  ))}
-                                </select>
-
-                                <div
-                                  style={{
-                                    display: "inline-grid",
-                                    gridTemplateColumns: "36px 46px 36px",
-                                    border: `1px solid ${BORDER}`,
-                                    borderRadius: 12,
-                                    overflow: "hidden",
-                                    background: "#fff",
-                                    height: 44
-                                  }}
-                                >
-                                  <button
-                                    type="button"
-                                    onClick={() => updateStock(item, -1, selectedOptId)}
-                                    style={{ border: "none", background: "none", cursor: "pointer", fontSize: 18, color: BRAND, fontWeight: 900 }}
-                                  >
-                                    −
-                                  </button>
-                                  <div style={{ display: "grid", placeItems: "center", fontSize: 14, fontWeight: 800, color: TEXT }}>
-                                    {optStock}
-                                  </div>
-                                  <button
-                                    type="button"
-                                    onClick={() => updateStock(item, 1, selectedOptId)}
-                                    style={{ border: "none", background: "none", cursor: "pointer", fontSize: 18, color: BRAND, fontWeight: 900 }}
-                                  >
-                                    +
-                                  </button>
-                                </div>
+                            <div
+                              style={{
+                                display: "inline-grid",
+                                gridTemplateColumns: "36px 60px 36px",
+                                border: `1px solid ${BORDER}`,
+                                borderRadius: 12,
+                                overflow: "hidden",
+                                background: "#fff",
+                                height: 44
+                              }}
+                            >
+                              <button
+                                type="button"
+                                onClick={() => updateStock(item, -1)}
+                                style={{ border: "none", background: "none", cursor: "pointer", fontSize: 18, color: BRAND, fontWeight: 900 }}
+                              >
+                                −
+                              </button>
+                              <div style={{ display: "grid", placeItems: "center", fontSize: 14, fontWeight: 800, color: TEXT }}>
+                                {item.stock || 0}
                               </div>
-                            );
-                          })()}
+                              <button
+                                type="button"
+                                onClick={() => updateStock(item, 1)}
+                                style={{ border: "none", background: "none", cursor: "pointer", fontSize: 18, color: BRAND, fontWeight: 900 }}
+                              >
+                                +
+                              </button>
+                            </div>
+                          </div>
+
+                          <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                            {VALENCIA_OPTIONS.map(opt => {
+                              const avail = Math.floor(Number(item.stock || 0) / opt.count);
+                              return (
+                                <div key={opt.id} style={{ fontSize: 10, background: '#f5f5f5', padding: '4px 8px', borderRadius: 6, color: MUTED }}>
+                                  {opt.label}: <strong>{avail}</strong>
+                                </div>
+                              );
+                            })}
+                          </div>
                         </div>
 
                         <div

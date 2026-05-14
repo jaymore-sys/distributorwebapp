@@ -1,5 +1,5 @@
 import { useNavigate } from "react-router-dom";
-import valenciaLogo from "../assets/05547902525dba681f4006d28f9e8e20b12b1f5b (1).jpg";
+import valenciaLogo from "../assets/drink-valencia-logo.jpg";
 import bounceLogo from "../assets/9aaf616a1f05b52baba7f0d12dcc6600408fd0e3 (1).png";
 import crunzzoLogo from "../assets/crunzzologo.png";
 import "../entry.css";
