@@ -86,9 +86,10 @@
 }
 
 .vld-header-logo {
-  width: 110px;
-  height: auto;
+  height: 38px;
+  width: auto;
   object-fit: contain;
+  border-radius: 6px;
 }
 
 .vld-topbar-step h2 {
@@ -137,11 +138,12 @@
 }
 
 .vld-hero-logo {
-  width: 190px;
-  height: auto;
+  height: 60px;
+  width: auto;
   object-fit: contain;
   display: block;
-  margin: 0 auto 16px;
+  margin: 0 auto 24px;
+  border-radius: 8px;
 }
 
 .vld-primary-btn,
@@ -156,11 +158,11 @@
 
 .vld-primary-btn {
   width: 100%;
-  height: 46px;
-  border-radius: 14px;
-  background: linear-gradient(180deg, #ff8f3f 0%, #ef6a1d 100%);
+  height: 52px;
+  border-radius: 12px;
+  background: #ef6a1d;
   color: #fff;
-  font-size: 15px;
+  font-size: 16px;
   box-shadow: 0 12px 24px rgba(239, 106, 29, 0.16);
 }
 
@@ -493,12 +495,195 @@
 
 .vld-add-btn {
   width: 100%;
-  height: 34px;
+  height: 42px;
   border-radius: 999px;
   margin-top: 10px;
-  background: linear-gradient(180deg, #ff8f3f 0%, #ef6a1d 100%);
+  background: #ef6a1d;
   color: #fff;
   font-size: 13px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  line-height: 1.1;
+}
+
+.vld-add-btn small {
+  display: block;
+  font-size: 10px;
+  opacity: 0.9;
+  font-weight: 500;
+  margin-top: 2px;
+}
+
+/* Options Sheet */
+.vld-options-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  z-index: 1000;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+}
+
+.vld-options-sheet {
+  width: 100%;
+  max-width: 430px;
+  background: #fff;
+  border-radius: 24px 24px 0 0;
+  padding: 20px;
+  position: relative;
+  max-height: 90vh;
+  overflow-y: auto;
+}
+
+.vld-options-close {
+  position: absolute;
+  top: -45px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 32px;
+  height: 32px;
+  background: #fff;
+  border-radius: 50%;
+  border: none;
+  font-size: 14px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+}
+
+.vld-options-header h3 {
+  margin: 0;
+  font-size: 15px;
+  color: #20263a;
+}
+
+.vld-options-header p {
+  margin: 4px 0 16px;
+  font-size: 13px;
+  color: #7d879b;
+}
+
+.vld-options-list {
+  display: grid;
+  gap: 12px;
+  margin-bottom: 24px;
+}
+
+.vld-option-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px;
+  background: #fff;
+  border: 1px solid #eee;
+  border-radius: 12px;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.02);
+}
+
+.vld-option-thumb {
+  width: 48px;
+  height: 48px;
+  background: #fafafa;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.vld-option-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.vld-option-info {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+.vld-option-label {
+  font-size: 14px;
+  font-weight: 600;
+  color: #20263a;
+}
+
+.vld-option-price {
+  font-size: 14px;
+  font-weight: 700;
+  color: #20263a;
+  margin-top: 2px;
+}
+
+.vld-option-add {
+  height: 32px;
+  padding: 0 20px;
+  border-radius: 999px;
+  background: #ef6a1d;
+  color: #fff;
+  border: none;
+  font-weight: 700;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.vld-option-qty {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.vld-option-qty button {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 1px solid #ddd;
+  background: #fff;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+}
+
+.vld-option-qty span {
+  font-weight: 700;
+  min-width: 20px;
+  text-align: center;
+}
+
+.vld-options-footer {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  background: #ef6a1d;
+  padding: 12px;
+  border-radius: 18px;
+  color: #fff;
+}
+
+.vld-options-footer-total small {
+  display: block;
+  font-size: 10px;
+  opacity: 0.9;
+  margin-bottom: 2px;
+}
+
+.vld-options-footer-total strong {
+  font-size: 18px;
+}
+
+.vld-options-review-btn {
+  background: transparent;
+  border: none;
+  color: #fff;
+  font-weight: 700;
+  font-size: 14px;
+  text-align: right;
+  cursor: pointer;
 }
 
 .vld-qty-row {
@@ -507,13 +692,14 @@
   align-items: center;
   gap: 8px;
   margin-top: 10px;
+  height: 34px;
 }
 
 .vld-qty-row button {
   height: 34px;
   border: none;
   border-radius: 999px;
-  background: linear-gradient(180deg, #ff8f3f 0%, #ef6a1d 100%);
+  background: #ef6a1d;
   color: #fff;
   font-size: 18px;
   cursor: pointer;
@@ -538,7 +724,7 @@
 }
 
 .vld-review-total {
-  background: linear-gradient(180deg, #ff8f3f 0%, #ef6a1d 100%);
+  background: #ef6a1d;
   color: #fff;
   border-radius: 18px;
   padding: 12px 14px;
@@ -558,7 +744,7 @@
   height: 54px;
   padding: 0 18px;
   border-radius: 18px;
-  background: linear-gradient(180deg, #ff8f3f 0%, #ef6a1d 100%);
+  background: #ef6a1d;
   color: #fff;
   font-size: 14px;
 }
@@ -670,7 +856,7 @@
 
 .vld-total-card {
   margin: 16px 0;
-  background: linear-gradient(180deg, #ff8f3f 0%, #ef6a1d 100%);
+  background: #ef6a1d;
   color: #fff;
   border-radius: 18px;
   padding: 16px;
@@ -820,7 +1006,7 @@
 
 .vld-history-hero {
   margin: 16px 0 14px;
-  background: linear-gradient(180deg, #ff8f3f 0%, #ef6a1d 100%);
+  background: #ef6a1d;
   color: #fff;
   border-radius: 22px;
   padding: 18px;

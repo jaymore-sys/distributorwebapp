@@ -12,7 +12,7 @@ import { doc, getDoc, setDoc, serverTimestamp } from "firebase/firestore";
 
 import { getFirebaseServices, setSelectedBackend } from "../firebase";
 
-import valenciaLogo from "../assets/valencia-logo.png";
+import valenciaLogo from "../assets/drink-valencia-logo.jpg";
 import bounceLogo from "../assets/9aaf616a1f05b52baba7f0d12dcc6600408fd0e3 (1).png";
 import crunzzoLogo from "../assets/crunzzologo.png";
 import landingHero from "../assets/landing-hero.png";

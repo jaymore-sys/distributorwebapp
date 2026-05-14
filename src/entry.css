@@ -1,6 +1,6 @@
 .entry-page {
   min-height: 100vh;
-  background: #ffffff;
+  background: #f8f9fb;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -11,10 +11,11 @@
   width: 100%;
   max-width: 430px;
   min-height: calc(100vh - 36px);
-  background: #ffffff;
-  border: 1px solid #ececec;
-  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.04);
+  background: #f8f9fb;
+  border: 1px solid #e8e8e8;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.03);
   overflow: hidden;
+  border-radius: 28px;
 }
 
 /* landing page */
@@ -22,17 +23,19 @@
 .landing-shell {
   display: flex;
   flex-direction: column;
-  padding: 26px 26px 30px;
+  padding: 32px 24px 40px;
+  background: #ffffff;
 }
 
 .landing-top {
   display: flex;
   justify-content: center;
-  padding-top: 24px;
+  padding-top: 10px;
 }
 
 .landing-brand-logo {
-  width: min(300px, 92%);
+  width: 240px;
+  max-width: 85%;
   height: auto;
   object-fit: contain;
 }
@@ -42,34 +45,42 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 30px 0 10px;
+  padding: 20px 0;
+  min-height: 0;
 }
 
 .landing-hero-image {
-  width: min(290px, 95%);
-  height: auto;
+  width: 100%;
+  max-width: 380px;
+  height: 100%;
+  max-height: 50vh;
   object-fit: contain;
 }
 
 .landing-bottom {
-  padding-top: 18px;
+  padding-top: 10px;
 }
 
 .landing-primary-btn {
   width: 100%;
-  height: 60px;
+  height: 56px;
   border: none;
-  border-radius: 18px;
-  background: linear-gradient(180deg, #ed8238 0%, #e16f2d 100%);
+  border-radius: 100px;
+  background: #E86B2F;
   color: #fff;
-  font-size: 2rem;
-  font-weight: 800;
+  font-size: 18px;
+  font-weight: 700;
   cursor: pointer;
-  box-shadow: 0 14px 28px rgba(225, 111, 45, 0.18);
+  box-shadow: 0 4px 14px rgba(232, 107, 47, 0.2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  font-family: inherit;
 }
 
 .landing-primary-btn span {
-  margin-left: 8px;
+  font-size: 18px;
 }
 
 /* choose section page */
@@ -80,27 +91,29 @@
 
 .section-page-head {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 6px 6px 14px;
-  border-bottom: 1px solid #ececec;
-  margin-bottom: 18px;
+  padding: 24px 20px 18px;
+  background: #fff;
+  border-bottom: 1px solid #f0f0f0;
+  margin-bottom: 24px;
 }
 
 .section-page-head h1 {
   margin: 0;
-  font-size: 16px;
-  line-height: 1.1;
-  color: #20263a;
+  font-size: 22px;
+  line-height: 1;
+  color: #1a202c;
   font-weight: 800;
 }
 
 .section-page-head p {
-  margin: 4px 0 0;
-  font-size: 11px;
-  color: #7d879b;
-  letter-spacing: 0.04em;
+  margin: 6px 0 0;
+  font-size: 13px;
+  color: #718096;
+  font-weight: 600;
+  letter-spacing: 0.02em;
 }
 
 .section-head-bell {
@@ -117,38 +130,46 @@
 
 .section-cards {
   display: grid;
-  gap: 18px;
+  gap: 22px;
+  padding: 0 16px 30px;
 }
 
 .section-card {
   background: #ffffff;
-  border: 1px solid #e8e8e8;
-  border-radius: 22px;
-  padding: 14px;
-  box-shadow: 0 2px 0 rgba(255, 255, 255, 0.7) inset;
+  border: 1px solid #edf2f7;
+  border-radius: 28px;
+  padding: 20px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.02);
 }
 
 .section-card-top {
   display: flex;
-  align-items: center;
-  gap: 14px;
-  margin-bottom: 14px;
+  align-items: flex-start;
+  gap: 16px;
+  margin-bottom: 20px;
 }
 
 .section-logo-box {
-  width: 82px;
-  height: 40px;
-  border-radius: 8px;
+  width: 90px;
+  height: 52px;
+  border-radius: 12px;
   overflow: hidden;
-  background: #ffffff;
+  background: #fff;
   flex-shrink: 0;
   display: flex;
   align-items: center;
   justify-content: center;
+  border: 1px solid #f0f0f0;
+}
+
+.section-logo-box.orange {
+  background: #ef6a1d;
+  border: none;
 }
 
 .section-logo-box.blue {
   background: #53b6e2;
+  border: none;
 }
 
 .section-logo-image {
@@ -164,18 +185,18 @@
 
 .section-card-copy h3 {
   margin: 0;
-  font-size: 15px;
-  color: #273043;
+  font-size: 18px;
+  color: #1a202c;
   font-weight: 800;
-  line-height: 1.2;
+  line-height: 1.1;
 }
 
 .section-status {
   display: inline-flex;
-  margin-top: 6px;
-  padding: 2px 8px;
-  border-radius: 6px;
-  font-size: 11px;
+  margin-top: 8px;
+  padding: 4px 12px;
+  border-radius: 8px;
+  font-size: 12px;
   font-weight: 700;
 }
 
@@ -197,22 +218,23 @@
 .section-mini-actions {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
-  gap: 10px;
-  padding-bottom: 12px;
+  gap: 12px;
+  padding-bottom: 18px;
 }
 
 .section-mini-actions button {
-  min-height: 48px;
-  border: 1px solid #d7dde8;
+  height: 54px;
+  border: 1px solid #e2e8f0;
   background: #ffffff;
-  border-radius: 10px;
-  color: #3f485c;
-  font-size: 12px;
+  border-radius: 12px;
+  color: #2d3748;
+  font-size: 13px;
   font-weight: 700;
-  cursor: default;
-  padding: 8px 6px;
+  cursor: pointer;
+  padding: 8px 4px;
   line-height: 1.2;
   text-align: center;
+  transition: all 0.2s;
 }
 
 .section-mini-actions .manage-btn.orange {
@@ -235,25 +257,26 @@
 
 .section-login-btn {
   width: 100%;
-  height: 42px;
+  height: 48px;
   border: none;
-  border-radius: 14px;
+  border-radius: 18px;
   color: #fff;
-  font-size: 15px;
+  font-size: 17px;
   font-weight: 800;
   cursor: pointer;
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.05);
 }
 
 .section-login-btn.orange {
-  background: linear-gradient(180deg, #ff8f3f 0%, #ef6a1d 100%);
+  background: #ef6a1d;
 }
 
 .section-login-btn.blue {
-  background: linear-gradient(180deg, #63c0e8 0%, #45aedc 100%);
+  background: #53b6e2;
 }
 
 .section-login-btn.red {
-  background: linear-gradient(180deg, #ff3f3f 0%, #e11919 100%);
+  background: #ea2a2a;
 }
 
 @media (max-width: 480px) {
@@ -276,7 +299,7 @@
 
   .landing-primary-btn {
     height: 56px;
-    font-size: 1.75rem;
+    font-size: 18px;
   }
 
   .section-shell {

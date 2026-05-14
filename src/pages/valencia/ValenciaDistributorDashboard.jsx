@@ -2,35 +2,23 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { onAuthStateChanged, signOut } from "firebase/auth";
 import {
-  addDoc,
   collection,
   doc,
   getDoc,
   onSnapshot,
   query,
+  runTransaction,
   serverTimestamp,
   updateDoc,
   where,
 } from "firebase/firestore";
 import { getDownloadURL, ref, uploadBytes } from "firebase/storage";
 import { getFirebaseServices } from "../../firebase";
-import "../bounce/bounce.css";
+import valenciaLogo from "../../assets/drink-valencia-logo.jpg";
+import HistoryDateFilter, { getFilterLabel, getFilterHeading } from "../../components/HistoryDateFilter";
+import "./valencia.css";
 
-const { auth, db, storage } = getFirebaseServices("drinkvalencia");
-
-const drinkValenciaLogo = `data:image/svg+xml;utf8,${encodeURIComponent(`
-<svg xmlns="http://www.w3.org/2000/svg" width="420" height="160" viewBox="0 0 420 160">
-  <defs>
-    <linearGradient id="dvGrad" x1="0" x2="1" y1="0" y2="1">
-      <stop offset="0%" stop-color="#ff9a4d"/>
-      <stop offset="100%" stop-color="#e46832"/>
-    </linearGradient>
-  </defs>
-  <rect width="420" height="160" rx="28" fill="url(#dvGrad)"/>
-  <text x="210" y="74" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="46" font-weight="700" fill="white">DRINK VALENCIA</text>
-  <text x="210" y="114" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="22" font-weight="600" letter-spacing="3" fill="white">DISTRIBUTOR</text>
-</svg>
-`)}`;
+const { auth, db, storage } = getFirebaseServices("valencia");
 
 function formatRupees(value) {
   return `₹${Number(value || 0).toLocaleString("en-IN", {
@@ -63,11 +51,11 @@ function isValidIndianGst(value) {
 
 function getAvatarBg(index) {
   const list = [
-    "linear-gradient(180deg, #ffbb7a 0%, #e46832 100%)",
-    "linear-gradient(180deg, #ffc98f 0%, #f28c45 100%)",
-    "linear-gradient(180deg, #ffd5a6 0%, #ea7a3a 100%)",
-    "linear-gradient(180deg, #ffc089 0%, #d95d22 100%)",
-    "linear-gradient(180deg, #ffb067 0%, #c94f18 100%)",
+    "#ef6a1d",
+    "#f28c45",
+    "#ea7a3a",
+    "#d95d22",
+    "#c94f18",
   ];
   return list[index % list.length];
 }
@@ -221,8 +209,8 @@ function buildInvoiceHtml(order) {
               <div>
                 <div class="label">Created At</div>
                 <div class="value">${escapeHtml(
-                  new Date(order?.createdAtMs || Date.now()).toLocaleString("en-IN")
-                )}</div>
+    new Date(order?.createdAtMs || Date.now()).toLocaleString("en-IN")
+  )}</div>
               </div>
             </div>
           </div>
@@ -294,63 +282,82 @@ function downloadInvoiceFile(order) {
 }
 
 const NAV_IDLE = "#9f8b82";
-const NAV_ACTIVE = "#e46832";
-const BRAND_ACCENT = "#e46832";
-const BRAND_GRAD_FROM = "#ff9a4d";
-const BRAND_GRAD_TO = "#e46832";
+const NAV_ACTIVE = "#ef6a1d";
+const BRAND_ACCENT = "#ef6a1d";
+const BRAND_GRAD_FROM = "#ef6a1d";
+const BRAND_GRAD_TO = "#ef6a1d";
 
 function ThemeOverrides() {
   return (
     <style>{`
-      .bzd-primary-btn,
-      .bzd-review-btn {
-        background: linear-gradient(180deg, ${BRAND_GRAD_FROM} 0%, ${BRAND_GRAD_TO} 100%) !important;
-        box-shadow: 0 10px 20px rgba(228,104,50,0.18) !important;
+      .vld-primary-btn,
+      .vld-review-btn {
+        background: ${BRAND_ACCENT} !important;
+        box-shadow: 0 10px 20px rgba(239,106,29,0.18) !important;
       }
 
-      .bzd-secondary-btn {
+      .vld-secondary-btn {
         border-color: ${BRAND_ACCENT} !important;
         color: ${BRAND_ACCENT} !important;
       }
 
-      .bzd-filter-row button.active,
-      .bzd-total-card,
-      .bzd-history-hero,
-      .bzd-sales-card {
-        background: linear-gradient(180deg, ${BRAND_GRAD_FROM} 0%, ${BRAND_GRAD_TO} 100%) !important;
+      .vld-filter-row button.active,
+      .vld-total-card,
+      .vld-history-hero,
+      .vld-sales-card,
+      .vld-qty-row button,
+      .vld-review-total {
+        background: ${BRAND_ACCENT} !important;
+        color: #fff !important;
       }
 
-      .bzd-add-btn {
+      .vld-sales-card h2,
+      .vld-sales-card small,
+      .vld-sales-card strong {
+        color: #fff !important;
+      }
+
+      .vld-add-btn {
         background: ${BRAND_ACCENT} !important;
       }
+      .vld-add-btn:disabled {
+        background: ${BRAND_ACCENT}18 !important;
+        color: ${BRAND_ACCENT} !important;
+        border: 1.5px solid ${BRAND_ACCENT}40 !important;
+      }
 
-      .bzd-bottom-nav button.active span {
+      .vld-bottom-nav button.active span {
         color: ${BRAND_ACCENT} !important;
       }
 
-      .bzd-bottom-nav button.active {
+      .vld-bottom-nav button.active {
         color: ${BRAND_ACCENT} !important;
+        background: ${BRAND_ACCENT}18 !important;
       }
 
-      .bzd-bottom-nav button.active svg path,
-      .bzd-bottom-nav button.active svg circle {
+      .vld-bottom-nav button.active svg path,
+      .vld-bottom-nav button.active svg circle {
         stroke: ${BRAND_ACCENT} !important;
       }
 
-      .bzd-history-search input:focus,
-      .bzd-search-wrap input:focus,
-      .bzd-form-list input:focus,
-      .bzd-form-list select:focus {
+      .vld-history-search input:focus,
+      .vld-search-wrap input:focus,
+      .vld-form-list input:focus,
+      .vld-form-list select:focus {
         border-color: ${BRAND_ACCENT} !important;
         box-shadow: 0 0 0 3px rgba(228,104,50,0.08) !important;
       }
 
-      .bzd-success-actions .receipt {
+      .vld-success-actions .receipt {
         background: #fff1e8 !important;
         color: ${BRAND_ACCENT} !important;
       }
 
-      .bzd-success-icon {
+      .vld-section-head button {
+        color: ${BRAND_ACCENT} !important;
+      }
+
+      .vld-success-icon {
         box-shadow: 0 10px 22px rgba(24,163,74,0.18) !important;
       }
     `}</style>
@@ -514,8 +521,13 @@ export default function ValenciaDistributorDashboard() {
 
   const [customerError, setCustomerError] = useState("");
   const [search, setSearch] = useState("");
+  const [historySearch, setHistorySearch] = useState("");
+  const [historyFilter, setHistoryFilter] = useState("today");
+  const [startDate, setStartDate] = useState(null);
+  const [endDate, setEndDate] = useState(null);
   const [category, setCategory] = useState("all");
   const [cart, setCart] = useState({});
+  const [selectedProductForOptions, setSelectedProductForOptions] = useState(null);
   const [pendingSummaryAfterCustomer, setPendingSummaryAfterCustomer] = useState(false);
 
   const [profileOpen, setProfileOpen] = useState(false);
@@ -531,7 +543,7 @@ export default function ValenciaDistributorDashboard() {
   });
 
   useEffect(() => {
-    let unsubscribeOrders = () => {};
+    let unsubscribeOrders = () => { };
 
     const unsubscribeAuth = onAuthStateChanged(auth, async (user) => {
       if (!user) {
@@ -632,32 +644,110 @@ export default function ValenciaDistributorDashboard() {
     });
   }, [products, category, search]);
 
-  const selectedItems = useMemo(() => {
-    return products
-      .filter((item) => cart[item.id] > 0)
-      .map((item) => {
-        const rate = Number(item.rate || item.price || 0);
-        const quantity = cart[item.id];
+  const VALENCIA_OPTIONS = [
+    { id: "1x250", label: "1 X 250 ml", count: 1 },
+    { id: "4x250", label: "4 X 250 ml", count: 4 },
+    { id: "6x250", label: "6 X 250 ml", count: 6 },
+    { id: "12x250", label: "12 X 250 ml", count: 12 },
+    { id: "24x250", label: "24 X 250 ml", count: 24 },
+  ];
 
-        return {
-          ...item,
-          quantity,
-          lineTotal: quantity * rate,
-          rateLabel: `₹${rate.toFixed(2)} / Unit`,
-        };
+  const getTotalRemainingUnits = (stockData) =>
+    VALENCIA_OPTIONS.reduce(
+      (sum, opt) => sum + Number(stockData[`stock_${opt.id}`] || 0) * opt.count,
+      0
+    );
+
+  const selectedProductForOptionsLive = useMemo(() => {
+    if (!selectedProductForOptions) return null;
+    return (
+      products.find((product) => product.id === selectedProductForOptions.id) ||
+      selectedProductForOptions
+    );
+  }, [products, selectedProductForOptions]);
+
+  const selectedItems = useMemo(() => {
+    const items = [];
+    products.forEach((product) => {
+      VALENCIA_OPTIONS.forEach((opt) => {
+        const cartKey = `${product.id}_${opt.id}`;
+        const qtyInCart = cart[cartKey] || 0;
+        if (qtyInCart > 0) {
+          const baseRate = Number(product.rate || product.price || 0);
+          const itemRate = baseRate * opt.count;
+          items.push({
+            ...product,
+            optionId: opt.id,
+            optionLabel: opt.label,
+            unitCount: opt.count,
+            quantity: qtyInCart,
+            lineTotal: qtyInCart * itemRate,
+            rate: itemRate,
+            rateLabel: `₹${itemRate.toFixed(2)} / ${opt.label}`,
+          });
+        }
       });
+    });
+    return items;
   }, [products, cart]);
 
-  const totalUnits = selectedItems.reduce((sum, item) => sum + item.quantity, 0);
+  const totalUnits = selectedItems.reduce((sum, item) => sum + item.quantity * item.unitCount, 0);
   const subtotal = selectedItems.reduce((sum, item) => sum + item.lineTotal, 0);
   const wholesaleDiscount = subtotal * 0.05;
   const taxableValue = subtotal - wholesaleDiscount;
   const tax = taxableValue * 0.08;
   const totalSaleValue = taxableValue + tax;
 
-  const todayRevenue = orders.reduce((sum, item) => sum + Number(item.total || 0), 0);
-  const todayUnits = orders.reduce((sum, item) => sum + Number(item.totalUnits || 0), 0);
+  const { todayRevenue, todayUnits } = useMemo(() => {
+    const d = new Date();
+    d.setHours(0, 0, 0, 0);
+    const todayOrders = orders.filter((o) => Number(o.createdAtMs || 0) >= d.getTime());
+    return {
+      todayRevenue: todayOrders.reduce((sum, item) => sum + Number(item.total || 0), 0),
+      todayUnits: todayOrders.reduce((sum, item) => sum + Number(item.totalUnits || 0), 0),
+    };
+  }, [orders]);
   const recentActivity = orders.slice(0, 3);
+
+  const filteredOrders = useMemo(() => {
+    const now = new Date();
+    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+
+    // Start of week
+    const d1 = new Date(now);
+    const day = d1.getDay();
+    const diff = d1.getDate() - day + (day === 0 ? -6 : 1);
+    const startOfWeek = new Date(d1.setDate(diff)).setHours(0, 0, 0, 0);
+
+    // Start of month
+    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
+
+    return orders.filter((order) => {
+      const ts = Number(order.createdAtMs || 0);
+      let timeMatch = true;
+      if (historyFilter === "today") timeMatch = ts >= startOfToday;
+      else if (historyFilter === "week") timeMatch = ts >= startOfWeek;
+      else if (historyFilter === "month") timeMatch = ts >= startOfMonth;
+      else if (historyFilter === "date" && startDate && endDate) {
+        const selStart = new Date(startDate.getFullYear(), startDate.getMonth(), startDate.getDate()).getTime();
+        const selEnd = new Date(endDate.getFullYear(), endDate.getMonth(), endDate.getDate()).getTime() + 86400000;
+        timeMatch = ts >= selStart && ts < selEnd;
+      }
+      else if (historyFilter === "all") timeMatch = true;
+
+      const s = historySearch.toLowerCase().trim();
+      const searchMatch =
+        !s ||
+        (order.shopName || "").toLowerCase().includes(s) ||
+        (order.id || "").toLowerCase().includes(s);
+
+      return timeMatch && searchMatch;
+    });
+  }, [orders, historyFilter, historySearch, startDate, endDate]);
+
+  const historyTotal = useMemo(() => {
+    return filteredOrders.reduce((sum, item) => sum + Number(item.total || 0), 0);
+  }, [filteredOrders]);
 
   const validateCustomerInputs = () => {
     if (!customer.shopName.trim()) {
@@ -793,22 +883,32 @@ export default function ValenciaDistributorDashboard() {
     }
   };
 
-  const addToCart = (productId) => {
-    setCart((prev) => ({
-      ...prev,
-      [productId]: (prev[productId] || 0) + 1,
-    }));
+  const addToCart = (productId, optionId) => {
+    const cartKey = `${productId}_${optionId}`;
+    const product = products.find((item) => item.id === productId);
+    const availableStock = Number(product?.[`stock_${optionId}`] || 0);
+
+    setCart((prev) => {
+      const currentQty = Number(prev[cartKey] || 0);
+      if (availableStock <= 0 || currentQty >= availableStock) return prev;
+
+      return {
+        ...prev,
+        [cartKey]: currentQty + 1,
+      };
+    });
   };
 
-  const removeFromCart = (productId) => {
+  const removeFromCart = (productId, optionId) => {
+    const cartKey = `${productId}_${optionId}`;
     setCart((prev) => {
       const next = { ...prev };
-      const current = next[productId] || 0;
+      const current = next[cartKey] || 0;
 
       if (current <= 1) {
-        delete next[productId];
+        delete next[cartKey];
       } else {
-        next[productId] = current - 1;
+        next[cartKey] = current - 1;
       }
 
       return next;
@@ -879,7 +979,10 @@ export default function ValenciaDistributorDashboard() {
       name: item.name || "",
       category: item.category || "",
       quantity: item.quantity,
+      unitCount: item.unitCount,
       unitLabel: item.unitLabel || "",
+      optionId: item.optionId,
+      optionLabel: item.optionLabel,
       rate: Number(item.rate || item.price || 0),
       lineTotal: item.lineTotal,
       imageUrl: item.imageUrl || item.image || "",
@@ -944,10 +1047,13 @@ export default function ValenciaDistributorDashboard() {
           productId: item.id,
           name: item.name || "",
           category: item.category || "",
+          optionId: item.optionId,
+          optionLabel: item.optionLabel,
           quantity: item.quantity,
+          unitCount: item.unitCount,
           unitLabel: item.unitLabel || "",
           rate: Number(item.rate || item.price || 0),
-          rateLabel: `₹${Number(item.rate || item.price || 0).toFixed(2)} / Unit`,
+          rateLabel: `₹${Number(item.rate || item.price || 0).toFixed(2)} / ${item.optionLabel}`,
           lineTotal: item.lineTotal,
           imageUrl: item.imageUrl || item.image || "",
         })),
@@ -961,10 +1067,63 @@ export default function ValenciaDistributorDashboard() {
         }),
       };
 
-      const savedRef = await addDoc(collection(db, "orders"), orderPayload);
+      const orderRef = doc(collection(db, "orders"));
+      const stockRequestsByProduct = selectedItems.reduce((map, item) => {
+        const productId = item.id;
+        const existing = map.get(productId) || {
+          productRef: doc(db, "products", productId),
+          requests: [],
+        };
+
+        existing.requests.push({
+          name: item.name || "Product",
+          optionLabel: item.optionLabel || item.optionId,
+          stockKey: `stock_${item.optionId}`,
+          quantity: Number(item.quantity || 0),
+        });
+        map.set(productId, existing);
+        return map;
+      }, new Map());
+
+      await runTransaction(db, async (transaction) => {
+        const productSnapshots = [];
+
+        for (const { productRef, requests } of stockRequestsByProduct.values()) {
+          const productSnap = await transaction.get(productRef);
+          productSnapshots.push({ productRef, requests, productSnap });
+        }
+
+        for (const { productRef, requests, productSnap } of productSnapshots) {
+          if (!productSnap.exists()) {
+            throw new Error(`${requests[0]?.name || "Product"} is no longer available.`);
+          }
+
+          const currentData = productSnap.data();
+          const nextData = { ...currentData };
+          const updateData = {};
+
+          requests.forEach((request) => {
+            const currentStock = Number(nextData[request.stockKey] || 0);
+            if (currentStock < request.quantity) {
+              throw new Error(
+                `Only ${currentStock} left for ${request.name} (${request.optionLabel}).`
+              );
+            }
+
+            const nextStock = currentStock - request.quantity;
+            nextData[request.stockKey] = nextStock;
+            updateData[request.stockKey] = nextStock;
+          });
+
+          updateData.stock = getTotalRemainingUnits(nextData);
+          transaction.update(productRef, updateData);
+        }
+
+        transaction.set(orderRef, orderPayload);
+      });
 
       setLastOrder({
-        id: savedRef.id,
+        id: orderRef.id,
         ...orderPayload,
       });
 
@@ -973,7 +1132,7 @@ export default function ValenciaDistributorDashboard() {
       setPendingSummaryAfterCustomer(false);
     } catch (error) {
       console.error("Submit sale error:", error);
-      alert("Failed to save sale in Firebase.");
+      alert(error.message || "Failed to save sale in Firebase.");
     } finally {
       setSubmittingOrder(false);
     }
@@ -982,9 +1141,8 @@ export default function ValenciaDistributorDashboard() {
   const handleWhatsappShare = () => {
     if (!lastOrder) return;
 
-    const text = `Hello ${lastOrder.shopName || ""}, your Drink Valencia order ${
-      lastOrder.invoiceNumber || ""
-    } of ${formatRupees(lastOrder.total || 0)} has been recorded successfully.`;
+    const text = `Hello ${lastOrder.shopName || ""}, your Drink Valencia order ${lastOrder.invoiceNumber || ""
+      } of ${formatRupees(lastOrder.total || 0)} has been recorded successfully.`;
 
     const url = `https://wa.me/${lastOrder.phone || ""}?text=${encodeURIComponent(text)}`;
     window.open(url, "_blank");
@@ -993,11 +1151,11 @@ export default function ValenciaDistributorDashboard() {
   const renderProductVisual = (product) => {
     const imageSrc = product.imageUrl || product.image || "";
     if (imageSrc) {
-      return <img src={imageSrc} alt={product.name} className="bzd-product-image" />;
+      return <img src={imageSrc} alt={product.name} className="vld-product-image" />;
     }
 
     return (
-      <div className="bzd-product-fallback">
+      <div className="vld-product-fallback">
         <span>{product.name}</span>
       </div>
     );
@@ -1005,7 +1163,7 @@ export default function ValenciaDistributorDashboard() {
 
   const renderMobileNav = (active) => (
     <div
-      className="bzd-bottom-nav"
+      className="vld-bottom-nav"
       style={{
         position: "relative",
         left: "auto",
@@ -1058,9 +1216,9 @@ export default function ValenciaDistributorDashboard() {
 
   if (loadingProfile || loadingProducts || loadingOrders) {
     return (
-      <div className="bzd-page">
+      <div className="vld-page">
         <ThemeOverrides />
-        <div className="bzd-shell bzd-shell-light">
+        <div className="vld-shell vld-shell-light">
           <div style={{ padding: "40px 0", textAlign: "center", color: "#7d879b" }}>
             Loading Drink Valencia distributor data...
           </div>
@@ -1071,9 +1229,9 @@ export default function ValenciaDistributorDashboard() {
 
   if (!userProfile) {
     return (
-      <div className="bzd-page">
+      <div className="vld-page">
         <ThemeOverrides />
-        <div className="bzd-shell bzd-shell-light">
+        <div className="vld-shell vld-shell-light">
           <div style={{ padding: "40px 0", textAlign: "center", color: "#7d879b" }}>
             Please log in again to continue.
           </div>
@@ -1084,10 +1242,10 @@ export default function ValenciaDistributorDashboard() {
 
   if (screen === "profile") {
     return (
-      <div className="bzd-page">
+      <div className="vld-page">
         <ThemeOverrides />
         <div
-          className="bzd-shell bzd-shell-light"
+          className="vld-shell vld-shell-light"
           style={{ display: "flex", flexDirection: "column", minHeight: "100vh" }}
         >
           <div style={{ flex: 1, overflowY: "auto", padding: "6px 2px 20px" }}>
@@ -1131,21 +1289,34 @@ export default function ValenciaDistributorDashboard() {
                   onClick={() => fileInputRef.current?.click()}
                   style={{
                     position: "absolute",
-                    right: -2,
-                    bottom: 6,
-                    width: 24,
-                    height: 24,
+                    right: -4,
+                    bottom: 2,
+                    width: 28,
+                    height: 28,
                     borderRadius: "50%",
-                    border: "2px solid #fff",
+                    border: "2.5px solid #fff",
                     background: BRAND_ACCENT,
                     color: "#fff",
-                    display: "grid",
-                    placeItems: "center",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
                     cursor: "pointer",
-                    fontSize: 12,
+                    boxShadow: "0 2px 8px rgba(0,0,0,0.15)",
                   }}
                 >
-                  📷
+                  <svg
+                    width="14"
+                    height="14"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="3"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  >
+                    <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" />
+                    <circle cx="12" cy="13" r="4" />
+                  </svg>
                 </button>
 
                 <input
@@ -1209,9 +1380,8 @@ export default function ValenciaDistributorDashboard() {
                   marginTop: 14,
                   background: profileMessage.includes("successfully") ? "#eef9f0" : "#fff0f0",
                   color: profileMessage.includes("successfully") ? "#27944e" : "#d42424",
-                  border: `1px solid ${
-                    profileMessage.includes("successfully") ? "#d7f0dc" : "#ffd1d1"
-                  }`,
+                  border: `1px solid ${profileMessage.includes("successfully") ? "#d7f0dc" : "#ffd1d1"
+                    }`,
                   borderRadius: "12px",
                   padding: "10px 12px",
                   fontSize: "13px",
@@ -1364,6 +1534,10 @@ export default function ValenciaDistributorDashboard() {
               <h3 style={{ margin: 0, fontSize: 20, color: "#20263a" }}>My Performance</h3>
               <button
                 type="button"
+                onClick={() => {
+                  setHistoryFilter("month");
+                  setScreen("history");
+                }}
                 style={{
                   border: "none",
                   background: "transparent",
@@ -1445,7 +1619,7 @@ export default function ValenciaDistributorDashboard() {
                   icon="?"
                   title="Help & Support"
                   subtitle="FAQs and customer support"
-                  onClick={() => {}}
+                  onClick={() => { }}
                   accent={BRAND_ACCENT}
                 />
               </div>
@@ -1479,22 +1653,22 @@ export default function ValenciaDistributorDashboard() {
 
   if (screen === "customer") {
     return (
-      <div className="bzd-page">
+      <div className="vld-page">
         <ThemeOverrides />
-        <div className="bzd-shell bzd-shell-light">
-          <div className="bzd-topbar-step">
-            <button type="button" className="bzd-back-btn" onClick={() => setScreen("home")}>
+        <div className="vld-shell vld-shell-light">
+          <div className="vld-topbar-step">
+            <button type="button" className="vld-back-btn" onClick={() => setScreen("home")}>
               ←
             </button>
             <h2>New Sale</h2>
-            <span className="bzd-top-placeholder" />
+            <span className="vld-top-placeholder" />
           </div>
 
-          <div className="bzd-step-content">
+          <div className="vld-step-content">
             <h1>Customer Details</h1>
             <p>Step 1 of 3: Enter the shop's basic information.</p>
 
-            <div className="bzd-form-list">
+            <div className="vld-form-list">
               <label>
                 <span>Shop Name</span>
                 <input
@@ -1561,10 +1735,10 @@ export default function ValenciaDistributorDashboard() {
             ) : null}
           </div>
 
-          <div className="bzd-step-footer">
+          <div className="vld-step-footer">
             <button
               type="button"
-              className="bzd-primary-btn"
+              className="vld-primary-btn"
               disabled={!customer.shopName.trim() || !customer.phone.trim()}
               onClick={moveToProducts}
             >
@@ -1578,10 +1752,10 @@ export default function ValenciaDistributorDashboard() {
 
   if (screen === "products") {
     return (
-      <div className="bzd-page">
+      <div className="vld-page">
         <ThemeOverrides />
         <div
-          className="bzd-shell bzd-shell-light"
+          className="vld-shell vld-shell-light"
           style={{
             display: "flex",
             flexDirection: "column",
@@ -1597,22 +1771,20 @@ export default function ValenciaDistributorDashboard() {
               paddingBottom: 14,
             }}
           >
-            <div className="bzd-topbar-step">
-              <button type="button" className="bzd-back-btn" onClick={() => setScreen("customer")}>
+            <div className="vld-topbar-step">
+              <button type="button" className="vld-back-btn" onClick={() => setScreen("customer")}>
                 ←
               </button>
 
-              <div className="bzd-step-center">
+              <div className="vld-step-center">
                 <small>STEP 2 OF 4</small>
                 <h2>Product Selection</h2>
               </div>
 
-              <button type="button" className="bzd-info-btn">
-                i
-              </button>
+              <div className="vld-top-placeholder" />
             </div>
 
-            <div className="bzd-search-wrap">
+            <div className="vld-search-wrap" style={{ padding: "0 16px" }}>
               <input
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
@@ -1620,7 +1792,7 @@ export default function ValenciaDistributorDashboard() {
               />
             </div>
 
-            <div className="bzd-filter-row">
+            <div className="vld-filter-row" style={{ padding: "0 16px", marginTop: 8 }}>
               {categoryTabs.map((tab) => (
                 <button
                   key={tab}
@@ -1634,58 +1806,150 @@ export default function ValenciaDistributorDashboard() {
             </div>
 
             {!filteredProducts.length ? (
-              <div
-                style={{
-                  background: "#fff",
-                  border: "1px solid #ececec",
-                  borderRadius: "18px",
-                  padding: "20px",
-                  textAlign: "center",
-                  color: "#7d879b",
-                  marginBottom: 10,
-                }}
-              >
+              <div className="vld-empty-card">
                 No products available. Please ask admin to upload products first.
               </div>
             ) : (
-              <div className="bzd-product-grid">
+              <div className="vld-product-grid">
                 {filteredProducts.map((product) => {
-                  const qty = cart[product.id] || 0;
+                  const productInCart = selectedItems.filter(si => si.id === product.id);
+                  const totalProductQty = productInCart.reduce((s, i) => s + i.quantity, 0);
+                  const isOutOfStock = VALENCIA_OPTIONS.every(opt => Number(product[`stock_${opt.id}`] || 0) <= 0);
 
                   return (
-                    <div className="bzd-product-card" key={product.id}>
-                      <div className="bzd-product-thumb">{renderProductVisual(product)}</div>
+                    <div className="vld-product-card" key={product.id} style={{ opacity: isOutOfStock ? 0.6 : 1 }}>
+                      <div className="vld-product-thumb">{renderProductVisual(product)}</div>
 
-                      <div className="bzd-product-meta">
+                      <div className="vld-product-meta">
                         <h4>{product.name}</h4>
                         <p>{product.description || product.category || "-"}</p>
+                        {isOutOfStock && (
+                          <div style={{ marginTop: 4, color: "#ff4d4f", fontSize: 10, fontWeight: 700, textTransform: "uppercase" }}>
+                            Out of Stock
+                          </div>
+                        )}
                       </div>
 
-                      {qty > 0 ? (
-                        <div className="bzd-qty-row">
-                          <button type="button" onClick={() => removeFromCart(product.id)}>
-                            −
-                          </button>
-                          <span>{qty}</span>
-                          <button type="button" onClick={() => addToCart(product.id)}>
-                            +
-                          </button>
-                        </div>
-                      ) : (
-                        <button
-                          type="button"
-                          className="bzd-add-btn"
-                          onClick={() => addToCart(product.id)}
-                        >
-                          ADD
-                        </button>
-                      )}
+                      <button
+                        type="button"
+                        className="vld-add-btn vld-add-with-options"
+                        onClick={() => setSelectedProductForOptions(product)}
+                        disabled={isOutOfStock}
+                        style={isOutOfStock ? { background: "#aab2bd", cursor: "not-allowed" } : {}}
+                      >
+                        {isOutOfStock ? (
+                          <span>OUT OF STOCK</span>
+                        ) : totalProductQty > 0 ? (
+                          <>
+                            <span>ADD</span>
+                            <small>{totalProductQty} Selected</small>
+                          </>
+                        ) : (
+                          <>
+                            <span>ADD</span>
+                            <small>5 Options</small>
+                          </>
+                        )}
+                      </button>
                     </div>
                   );
                 })}
               </div>
             )}
           </div>
+
+          {selectedProductForOptionsLive && (
+            <div className="vld-options-overlay">
+              <div className="vld-options-sheet">
+                <button
+                  className="vld-options-close"
+                  onClick={() => setSelectedProductForOptions(null)}
+                >
+                  ✕
+                </button>
+
+                <div className="vld-options-header" style={{ display: "flex", alignItems: "flex-start", gap: 12, marginBottom: 16 }}>
+                  <button
+                    type="button"
+                    className="vld-back-btn"
+                    onClick={() => setSelectedProductForOptions(null)}
+                    style={{ padding: 0, width: 24, height: 24, display: "flex", alignItems: "center", justifyContent: "center", marginTop: -2 }}
+                  >
+                    ←
+                  </button>
+                  <div>
+                    <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700, textTransform: "uppercase" }}>
+                      {selectedProductForOptionsLive.name}
+                    </h3>
+                    <p style={{ margin: 0, fontSize: 13, color: "#7d879b" }}>
+                      {selectedProductForOptionsLive.description || "250 ml"}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="vld-options-list">
+                  {VALENCIA_OPTIONS.map((opt) => {
+                    const cartKey = `${selectedProductForOptionsLive.id}_${opt.id}`;
+                    const qty = cart[cartKey] || 0;
+                    const baseRate = Number(selectedProductForOptionsLive.rate || selectedProductForOptionsLive.price || 0);
+                    const itemPrice = baseRate * opt.count;
+                    const stockKey = `stock_${opt.id}`;
+                    const availableStock = Number(selectedProductForOptionsLive[stockKey] || 0);
+
+                    return (
+                      <div className="vld-option-row" key={opt.id}>
+                        <div className="vld-option-thumb">
+                          {renderProductVisual(selectedProductForOptionsLive)}
+                        </div>
+                        <div className="vld-option-info">
+                          <span className="vld-option-label">{opt.label}</span>
+                          <span className="vld-option-price">₹{itemPrice}</span>
+                          <div style={{ fontSize: 10, color: availableStock <= 0 ? "#ff4d4f" : "#52c41a", fontWeight: 600 }}>
+                            {availableStock > 0 ? `In Stock: ${availableStock}` : "Out of Stock"}
+                          </div>
+                        </div>
+
+                        {qty > 0 ? (
+                          <div className="vld-option-qty">
+                            <button onClick={() => removeFromCart(selectedProductForOptionsLive.id, opt.id)}>−</button>
+                            <span>{qty}</span>
+                            <button
+                              onClick={() => addToCart(selectedProductForOptionsLive.id, opt.id)}
+                              disabled={qty >= availableStock}
+                            >+</button>
+                          </div>
+                        ) : (
+                          <button
+                            className="vld-option-add"
+                            onClick={() => addToCart(selectedProductForOptionsLive.id, opt.id)}
+                            disabled={availableStock <= 0}
+                          >
+                            ADD
+                          </button>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+
+                <div className="vld-options-footer">
+                  <div className="vld-options-footer-total">
+                    <small>{totalUnits} ITEMS SELECTED</small>
+                    <strong>{formatRupees(subtotal)} Total</strong>
+                  </div>
+                  <button
+                    className="vld-options-review-btn"
+                    onClick={() => {
+                      setSelectedProductForOptions(null);
+                      moveToSummary();
+                    }}
+                  >
+                    Review Order →
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
 
           <div
             style={{
@@ -1703,14 +1967,14 @@ export default function ValenciaDistributorDashboard() {
                 gap: 12,
               }}
             >
-              <div className="bzd-review-total">
+              <div className="vld-review-total">
                 <small>{totalUnits} ITEMS SELECTED</small>
                 <strong>{formatRupees(subtotal)} Total</strong>
               </div>
 
               <button
                 type="button"
-                className="bzd-review-btn"
+                className="vld-review-btn"
                 disabled={!selectedItems.length}
                 onClick={moveToSummary}
               >
@@ -1727,41 +1991,41 @@ export default function ValenciaDistributorDashboard() {
 
   if (screen === "summary") {
     return (
-      <div className="bzd-page">
+      <div className="vld-page">
         <ThemeOverrides />
-        <div className="bzd-shell bzd-shell-light">
-          <div className="bzd-topbar-step">
-            <button type="button" className="bzd-back-btn" onClick={() => setScreen("products")}>
+        <div className="vld-shell vld-shell-light">
+          <div className="vld-topbar-step">
+            <button type="button" className="vld-back-btn" onClick={() => setScreen("products")}>
               ←
             </button>
             <h2>Order Summary</h2>
-            <span className="bzd-top-placeholder" />
+            <span className="vld-top-placeholder" />
           </div>
 
-          <div className="bzd-progress-row">
+          <div className="vld-progress-row">
             <span />
             <span />
             <span className="active" />
           </div>
 
-          <div className="bzd-summary-block">
+          <div className="vld-summary-block">
             <h3>Review Products</h3>
             <p>{selectedItems.length} items in your cart</p>
 
-            <div className="bzd-summary-list">
+            <div className="vld-summary-list">
               {selectedItems.map((item) => (
-                <div className="bzd-summary-item" key={item.id}>
-                  <div className="bzd-summary-thumb">
+                <div className="vld-summary-item" key={`${item.id}_${item.optionId}`}>
+                  <div className="vld-summary-thumb">
                     {item.imageUrl || item.image ? (
                       <img src={item.imageUrl || item.image} alt={item.name} />
                     ) : (
-                      <div className="bzd-summary-fallback">{item.name}</div>
+                      <div className="vld-summary-fallback">{item.name}</div>
                     )}
                   </div>
 
-                  <div className="bzd-summary-copy">
+                  <div className="vld-summary-copy">
                     <h4>{item.name}</h4>
-                    <p>Qty: {item.quantity} Pcs</p>
+                    <p>{item.optionLabel} • Qty: {item.quantity}</p>
                     <small>{item.rateLabel}</small>
                   </div>
 
@@ -1771,10 +2035,10 @@ export default function ValenciaDistributorDashboard() {
             </div>
           </div>
 
-          <div className="bzd-order-card">
+          <div className="vld-order-card">
             <h3>Order Details</h3>
 
-            <div className="bzd-order-rows">
+            <div className="vld-order-rows">
               <div>
                 <span>Subtotal</span>
                 <strong>{formatRupees(subtotal)}</strong>
@@ -1790,26 +2054,16 @@ export default function ValenciaDistributorDashboard() {
             </div>
           </div>
 
-          <div className="bzd-total-card">
+          <div className="vld-total-card">
             <div>
               <small>TOTAL SALE VALUE</small>
               <strong>{formatRupees(totalSaleValue)}</strong>
             </div>
-            <button type="button" onClick={handleDownloadCurrentInvoice}>🧾</button>
           </div>
 
           <button
             type="button"
-            className="bzd-secondary-btn"
-            onClick={handleDownloadCurrentInvoice}
-            style={{ marginTop: 12, marginBottom: 12 }}
-          >
-            Download Invoice
-          </button>
-
-          <button
-            type="button"
-            className="bzd-primary-btn"
+            className="vld-primary-btn"
             onClick={submitSale}
             disabled={submittingOrder}
           >
@@ -1822,19 +2076,19 @@ export default function ValenciaDistributorDashboard() {
 
   if (screen === "success") {
     return (
-      <div className="bzd-page">
+      <div className="vld-page">
         <ThemeOverrides />
-        <div className="bzd-shell bzd-shell-light">
-          <div className="bzd-topbar-step">
-            <button type="button" className="bzd-back-btn" onClick={() => setScreen("home")}>
+        <div className="vld-shell vld-shell-light">
+          <div className="vld-topbar-step">
+            <button type="button" className="vld-back-btn" onClick={() => setScreen("home")}>
               ←
             </button>
             <h2>Sale Confirmation</h2>
-            <span className="bzd-top-placeholder" />
+            <span className="vld-top-placeholder" />
           </div>
 
-          <div className="bzd-success-wrap">
-            <div className="bzd-success-icon">✓</div>
+          <div className="vld-success-wrap">
+            <div className="vld-success-icon">✓</div>
             <h1>Sale Recorded Successfully!</h1>
             <p>
               Your transaction has been processed and added to
@@ -1842,33 +2096,33 @@ export default function ValenciaDistributorDashboard() {
               the daily ledger.
             </p>
 
-            <div className="bzd-success-card">
-              <div className="bzd-success-shop">
-                <div className="bzd-shop-thumb">🏪</div>
+            <div className="vld-success-card">
+              <div className="vld-success-shop">
+                <div className="vld-shop-thumb">🏪</div>
                 <div>
                   <small>SHOP NAME</small>
                   <h3>{lastOrder?.shopName || "-"}</h3>
                 </div>
               </div>
 
-              <div className="bzd-success-divider" />
+              <div className="vld-success-divider" />
 
-              <div className="bzd-success-total">
+              <div className="vld-success-total">
                 <div>
                   <small>TOTAL VALUE</small>
                   <strong>{formatRupees(lastOrder?.total || 0)}</strong>
                 </div>
 
-                <div className="bzd-success-actions">
-                  <button type="button" className="whatsapp" onClick={handleWhatsappShare}>
-                    🟢
-                  </button>
+                <div className="vld-success-actions">
                   <button
                     type="button"
-                    className="receipt"
-                    onClick={() => downloadInvoiceFile(lastOrder)}
+                    className="whatsapp"
+                    onClick={handleWhatsappShare}
+                    style={{ background: "#25D366", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center" }}
                   >
-                    🧾
+                    <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
+                      <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.414 0 .018 5.396.015 12.03a11.811 11.811 0 001.592 5.96L0 24l6.117-1.605a11.82 11.82 0 005.925 1.587h.005c6.632 0 12.032-5.4 12.035-12.034a11.84 11.84 0 00-3.527-8.498z" />
+                    </svg>
                   </button>
                 </div>
               </div>
@@ -1877,18 +2131,18 @@ export default function ValenciaDistributorDashboard() {
 
           <button
             type="button"
-            className="bzd-secondary-btn"
+            className="vld-secondary-btn"
             onClick={() => downloadInvoiceFile(lastOrder)}
             style={{ marginBottom: 12 }}
           >
             Download Invoice
           </button>
 
-          <button type="button" className="bzd-primary-btn" onClick={startNewSale}>
+          <button type="button" className="vld-primary-btn" onClick={startNewSale}>
             Log Another Sale
           </button>
 
-          <button type="button" className="bzd-secondary-btn" onClick={() => setScreen("home")}>
+          <button type="button" className="vld-secondary-btn" onClick={() => setScreen("home")}>
             Back to Home
           </button>
         </div>
@@ -1898,34 +2152,53 @@ export default function ValenciaDistributorDashboard() {
 
   if (screen === "history") {
     return (
-      <div className="bzd-page">
+      <div className="vld-page">
         <ThemeOverrides />
         <div
-          className="bzd-shell bzd-shell-light"
+          className="vld-shell vld-shell-light"
           style={{ display: "flex", flexDirection: "column", minHeight: "100vh" }}
         >
           <div style={{ flex: 1, overflowY: "auto" }}>
-            <div className="bzd-topbar-step">
-              <button type="button" className="bzd-back-btn" onClick={() => setScreen("home")}>
+            <div className="vld-topbar-step">
+              <button type="button" className="vld-back-btn" onClick={() => setScreen("home")}>
                 ←
               </button>
               <h2>Daily Sales History</h2>
-              <button type="button" className="bzd-cal-btn">🗓</button>
+              <span className="vld-top-placeholder" />
             </div>
 
-            <div className="bzd-history-hero">
-              <small>Total Sales Today</small>
-              <strong>{formatRupees(todayRevenue)}</strong>
-              <span>{orders.length} Transactions</span>
+            <div className="vld-history-hero">
+              <small>
+                {getFilterLabel(historyFilter, startDate, endDate)}
+              </small>
+              <strong>{formatRupees(historyTotal)}</strong>
+              <span>{filteredOrders.length} Transactions</span>
             </div>
 
-            <div className="bzd-search-wrap bzd-history-search">
-              <input placeholder="Search shop name, ID..." />
+            <HistoryDateFilter
+              historyFilter={historyFilter}
+              setHistoryFilter={setHistoryFilter}
+              startDate={startDate}
+              setStartDate={setStartDate}
+              endDate={endDate}
+              setEndDate={setEndDate}
+              accentColor="#ef6a1d"
+              cssPrefix="vld"
+            />
+
+            <div className="vld-search-wrap vld-history-search">
+              <input
+                placeholder="Search shop name, ID..."
+                value={historySearch}
+                onChange={(e) => setHistorySearch(e.target.value)}
+              />
             </div>
 
-            <div className="bzd-history-day">TODAY</div>
+            <div className="vld-history-day">
+              {getFilterHeading(historyFilter, startDate, endDate)}
+            </div>
 
-            {!orders.length ? (
+            {!filteredOrders.length ? (
               <div
                 style={{
                   background: "#fff",
@@ -1939,17 +2212,17 @@ export default function ValenciaDistributorDashboard() {
                 No sales recorded yet.
               </div>
             ) : (
-              <div className="bzd-history-list">
-                {orders.map((item, index) => (
-                  <div className="bzd-history-row" key={item.id}>
+              <div className="vld-history-list">
+                {filteredOrders.map((item, index) => (
+                  <div className="vld-history-row" key={item.id}>
                     <div
-                      className="bzd-history-avatar"
+                      className="vld-history-avatar"
                       style={{ background: getAvatarBg(index) }}
                     >
                       {item.shopName?.charAt(0) || "S"}
                     </div>
 
-                    <div className="bzd-history-copy">
+                    <div className="vld-history-copy">
                       <h4>{item.shopName}</h4>
                       <p>ID: #{8817 + index} • {item.timeLabel || "-"}</p>
                     </div>
@@ -1968,16 +2241,16 @@ export default function ValenciaDistributorDashboard() {
   }
 
   return (
-    <div className="bzd-page">
+    <div className="vld-page">
       <ThemeOverrides />
       <div
-        className="bzd-shell bzd-shell-home"
+        className="vld-shell vld-shell-home"
         style={{ display: "flex", flexDirection: "column", minHeight: "100vh" }}
       >
         <div style={{ flex: 1, overflowY: "auto" }}>
-          <div className="bzd-home-topbar">
-            <div className="bzd-home-left">
-              <div className="bzd-user-avatar">
+          <div className="vld-home-topbar">
+            <div className="vld-home-left">
+              <div className="vld-user-avatar">
                 {(userProfile?.name || "D").charAt(0).toUpperCase()}
               </div>
               <div>
@@ -1986,29 +2259,29 @@ export default function ValenciaDistributorDashboard() {
               </div>
             </div>
 
-            <div className="bzd-home-right">
-              <button type="button" className="bzd-bell-btn">🔔</button>
-              <img src={drinkValenciaLogo} alt="Drink Valencia" className="bzd-header-logo" />
+            <div className="vld-home-right">
+              <button type="button" className="vld-bell-btn">🔔</button>
+              <img src={valenciaLogo} alt="Drink Valencia" className="vld-header-logo" />
             </div>
           </div>
 
-          <div className="bzd-hero-block">
+          <div className="vld-hero-block">
             <h1>Ready to sell?</h1>
             <p>Log a new transaction immediately.</p>
-            <img src={drinkValenciaLogo} alt="Drink Valencia" className="bzd-hero-logo" />
+            <img src={valenciaLogo} alt="Drink Valencia" className="vld-hero-logo" />
 
-            <button type="button" className="bzd-primary-btn" onClick={startNewSale}>
+            <button type="button" className="vld-primary-btn" onClick={startNewSale}>
               ⊕ New Sale
             </button>
           </div>
 
-          <div className="bzd-sales-card">
-            <div className="bzd-sales-head">
+          <div className="vld-sales-card">
+            <div className="vld-sales-head">
               <h2>Sales Today</h2>
               <span>{orders.length ? "Live data" : "No sales yet"}</span>
             </div>
 
-            <div className="bzd-sales-grid">
+            <div className="vld-sales-grid">
               <div>
                 <small>Revenue</small>
                 <strong>{formatRupees(todayRevenue)}</strong>
@@ -2021,7 +2294,7 @@ export default function ValenciaDistributorDashboard() {
             </div>
           </div>
 
-          <div className="bzd-section-head">
+          <div className="vld-section-head">
             <h2>Recent Activity</h2>
             <button type="button" onClick={() => setScreen("history")}>
               View All
@@ -2042,23 +2315,22 @@ export default function ValenciaDistributorDashboard() {
               No recent activity yet.
             </div>
           ) : (
-            <div className="bzd-activity-list">
+            <div className="vld-activity-list">
               {recentActivity.map((item, index) => (
-                <div className="bzd-activity-card" key={item.id}>
+                <div className="vld-activity-card" key={item.id}>
                   <div
-                    className={`bzd-activity-icon ${
-                      index % 3 === 0 ? "red" : index % 3 === 1 ? "orange" : "purple"
-                    }`}
+                    className={`vld-activity-icon ${index % 3 === 0 ? "red" : index % 3 === 1 ? "orange" : "purple"
+                      }`}
                   >
                     🏪
                   </div>
 
-                  <div className="bzd-activity-copy">
+                  <div className="vld-activity-copy">
                     <h4>{item.shopName}</h4>
                     <p>{item.timeLabel || "-"}</p>
                   </div>
 
-                  <div className="bzd-activity-right">
+                  <div className="vld-activity-right">
                     <strong>{formatRupees(item.total)}</strong>
                     <span>Completed</span>
                   </div>

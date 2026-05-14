@@ -15,6 +15,7 @@ import {
 import { getDownloadURL, ref, uploadBytes } from "firebase/storage";
 import crunzzoLogo from "../../assets/crunzzologo.png";
 import { getFirebaseServices } from "../../firebase";
+import HistoryDateFilter, { getFilterLabel, getFilterHeading } from "../../components/HistoryDateFilter";
 import "./crunzzo.css";
 
 const { auth, db, storage } = getFirebaseServices("crunzzo");
@@ -208,8 +209,8 @@ function buildInvoiceHtml(order) {
               <div>
                 <div class="label">Created At</div>
                 <div class="value">${escapeHtml(
-                  new Date(order?.createdAtMs || Date.now()).toLocaleString("en-IN")
-                )}</div>
+    new Date(order?.createdAtMs || Date.now()).toLocaleString("en-IN")
+  )}</div>
               </div>
             </div>
           </div>
@@ -289,55 +290,103 @@ const BRAND_GRAD_TO = "#d81b25";
 function ThemeOverrides() {
   return (
     <style>{`
-      .bzd-primary-btn,
-      .bzd-review-btn {
+      [data-brand="crunzzo"] .bzd-primary-btn,
+      [data-brand="crunzzo"] .bzd-review-btn {
         background: linear-gradient(180deg, ${BRAND_GRAD_FROM} 0%, ${BRAND_GRAD_TO} 100%) !important;
         box-shadow: 0 10px 20px rgba(229,31,40,0.18) !important;
       }
 
-      .bzd-secondary-btn {
+      [data-brand="crunzzo"] .bzd-secondary-btn {
         border-color: ${BRAND_ACCENT} !important;
         color: ${BRAND_ACCENT} !important;
       }
 
-      .bzd-filter-row button.active,
-      .bzd-total-card,
-      .bzd-history-hero,
-      .bzd-sales-card {
+      [data-brand="crunzzo"] .bzd-filter-row button.active,
+      [data-brand="crunzzo"] .bzd-total-card,
+      [data-brand="crunzzo"] .bzd-history-hero,
+      [data-brand="crunzzo"] .bzd-sales-card,
+      [data-brand="crunzzo"] .czd-qty-row button,
+      [data-brand="crunzzo"] .bzd-qty-row button,
+      [data-brand="crunzzo"] .czd-review-total,
+      [data-brand="crunzzo"] .bzd-review-total {
         background: linear-gradient(180deg, ${BRAND_GRAD_FROM} 0%, ${BRAND_GRAD_TO} 100%) !important;
+        color: #fff !important;
       }
 
-      .bzd-add-btn {
+      [data-brand="crunzzo"] .bzd-sales-card h2,
+      [data-brand="crunzzo"] .bzd-sales-card small,
+      [data-brand="crunzzo"] .bzd-sales-card strong {
+        color: #fff !important;
+      }
+
+      [data-brand="crunzzo"] .bzd-add-btn,
+      [data-brand="crunzzo"] .czd-add-btn {
         background: ${BRAND_ACCENT} !important;
       }
+      [data-brand="crunzzo"] .bzd-add-btn:disabled,
+      [data-brand="crunzzo"] .czd-add-btn:disabled {
+        background: ${BRAND_ACCENT}18 !important;
+        color: ${BRAND_ACCENT} !important;
+        border: 1.5px solid ${BRAND_ACCENT}40 !important;
+      }
 
-      .bzd-bottom-nav button.active span {
+      [data-brand="crunzzo"] .bzd-bottom-nav button.active span,
+      [data-brand="crunzzo"] .czd-bottom-nav button.active span {
         color: ${BRAND_ACCENT} !important;
       }
 
-      .bzd-bottom-nav button.active {
+      [data-brand="crunzzo"] .bzd-bottom-nav button.active,
+      [data-brand="crunzzo"] .czd-bottom-nav button.active {
         color: ${BRAND_ACCENT} !important;
+        background: ${BRAND_ACCENT}18 !important;
       }
 
-      .bzd-bottom-nav button.active svg path,
-      .bzd-bottom-nav button.active svg circle {
+      [data-brand="crunzzo"] .bzd-bottom-nav button.active svg path,
+      [data-brand="crunzzo"] .bzd-bottom-nav button.active svg circle,
+      [data-brand="crunzzo"] .czd-bottom-nav button.active svg path,
+      [data-brand="crunzzo"] .czd-bottom-nav button.active svg circle {
         stroke: ${BRAND_ACCENT} !important;
       }
 
-      .bzd-history-search input:focus,
-      .bzd-search-wrap input:focus,
-      .bzd-form-list input:focus,
-      .bzd-form-list select:focus {
+      [data-brand="crunzzo"] .bzd-history-search input:focus,
+      [data-brand="crunzzo"] .bzd-search-wrap input:focus,
+      [data-brand="crunzzo"] .bzd-form-list input:focus,
+      [data-brand="crunzzo"] .bzd-form-list select:focus {
         border-color: ${BRAND_ACCENT} !important;
         box-shadow: 0 0 0 3px rgba(229,31,40,0.08) !important;
       }
 
-      .bzd-success-actions .receipt {
+      [data-brand="crunzzo"] .bzd-success-actions .receipt {
         background: #fdeeee !important;
         color: ${BRAND_ACCENT} !important;
       }
 
-      .bzd-success-icon {
+      [data-brand="crunzzo"] .bzd-progress-row span {
+        background: #f4c8c8 !important;
+      }
+
+      [data-brand="crunzzo"] .bzd-progress-row span.active {
+        background: ${BRAND_ACCENT} !important;
+      }
+
+      [data-brand="crunzzo"] .bzd-summary-copy small {
+        color: ${BRAND_ACCENT} !important;
+      }
+
+      [data-brand="crunzzo"] .bzd-summary-fallback {
+        background: linear-gradient(180deg, #ffe3d7 0%, #ffd1b4 100%) !important;
+        color: #9f3d00 !important;
+      }
+
+      [data-brand="crunzzo"] .bzd-success-wrap h1 {
+        color: ${BRAND_ACCENT} !important;
+      }
+
+      [data-brand="crunzzo"] .bzd-section-head button {
+        color: ${BRAND_ACCENT} !important;
+      }
+
+      [data-brand="crunzzo"] .bzd-success-icon {
         box-shadow: 0 10px 22px rgba(24,163,74,0.18) !important;
       }
     `}</style>
@@ -501,6 +550,10 @@ export default function CrunzzoDistributorDashboard() {
 
   const [customerError, setCustomerError] = useState("");
   const [search, setSearch] = useState("");
+  const [historySearch, setHistorySearch] = useState("");
+  const [historyFilter, setHistoryFilter] = useState("today");
+  const [startDate, setStartDate] = useState(null);
+  const [endDate, setEndDate] = useState(null);
   const [category, setCategory] = useState("all");
   const [cart, setCart] = useState({});
   const [pendingSummaryAfterCustomer, setPendingSummaryAfterCustomer] = useState(false);
@@ -518,7 +571,7 @@ export default function CrunzzoDistributorDashboard() {
   });
 
   useEffect(() => {
-    let unsubscribeOrders = () => {};
+    let unsubscribeOrders = () => { };
 
     const unsubscribeAuth = onAuthStateChanged(auth, async (user) => {
       if (!user) {
@@ -643,8 +696,58 @@ export default function CrunzzoDistributorDashboard() {
   const tax = taxableValue * 0.08;
   const totalSaleValue = taxableValue + tax;
 
-  const todayRevenue = orders.reduce((sum, item) => sum + Number(item.total || 0), 0);
-  const todayUnits = orders.reduce((sum, item) => sum + Number(item.totalUnits || 0), 0);
+  const { todayRevenue, todayUnits } = useMemo(() => {
+    const d = new Date();
+    d.setHours(0, 0, 0, 0);
+    const todayOrders = orders.filter((o) => Number(o.createdAtMs || 0) >= d.getTime());
+    return {
+      todayRevenue: todayOrders.reduce((sum, item) => sum + Number(item.total || 0), 0),
+      todayUnits: todayOrders.reduce((sum, item) => sum + Number(item.totalUnits || 0), 0),
+    };
+  }, [orders]);
+
+  const filteredOrders = useMemo(() => {
+    const now = new Date();
+    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+
+    // Start of week
+    const d1 = new Date(now);
+    const day = d1.getDay();
+    const diff = d1.getDate() - day + (day === 0 ? -6 : 1);
+    const startOfWeek = new Date(d1.setDate(diff)).setHours(0, 0, 0, 0);
+
+    // Start of month
+    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
+
+    return orders.filter((order) => {
+      const ts = Number(order.createdAtMs || 0);
+      let timeMatch = true;
+      if (historyFilter === "today") timeMatch = ts >= startOfToday;
+      else if (historyFilter === "week") timeMatch = ts >= startOfWeek;
+      else if (historyFilter === "month") timeMatch = ts >= startOfMonth;
+      else if (historyFilter === "date" && startDate) {
+        const selStart = new Date(startDate.getFullYear(), startDate.getMonth(), startDate.getDate()).getTime();
+        const selEnd = endDate
+          ? new Date(endDate.getFullYear(), endDate.getMonth(), endDate.getDate()).getTime() + 86400000
+          : selStart + 86400000;
+        timeMatch = ts >= selStart && ts < selEnd;
+      }
+      else if (historyFilter === "all") timeMatch = true;
+
+      const s = historySearch.toLowerCase().trim();
+      const searchMatch =
+        !s ||
+        (order.shopName || "").toLowerCase().includes(s) ||
+        (order.id || "").toLowerCase().includes(s);
+
+      return timeMatch && searchMatch;
+    });
+  }, [orders, historyFilter, historySearch, startDate, endDate]);
+
+  const historyTotal = useMemo(() => {
+    return filteredOrders.reduce((sum, item) => sum + Number(item.total || 0), 0);
+  }, [filteredOrders]);
+
   const recentActivity = orders.slice(0, 3);
 
   const validateCustomerInputs = () => {
@@ -782,9 +885,17 @@ export default function CrunzzoDistributorDashboard() {
   };
 
   const addToCart = (productId) => {
+    const product = products.find((p) => p.id === productId);
+    const availableStock = Number(product?.stock || 0);
+    const currentQty = cart[productId] || 0;
+
+    if (currentQty >= availableStock) {
+      return;
+    }
+
     setCart((prev) => ({
       ...prev,
-      [productId]: (prev[productId] || 0) + 1,
+      [productId]: currentQty + 1,
     }));
   };
 
@@ -948,7 +1059,29 @@ export default function CrunzzoDistributorDashboard() {
         }),
       };
 
-      const savedRef = await addDoc(collection(db, "orders"), orderPayload);
+      // 1. Save the Order
+      let savedRef;
+      try {
+        savedRef = await addDoc(collection(db, "orders"), orderPayload);
+      } catch (err) {
+        console.error("Order Creation Error:", err);
+        throw new Error(`Order creation failed: ${err.message}`);
+      }
+
+      // 2. Update Stock (best-effort - distributor may lack write access to products)
+      try {
+        for (const item of selectedItems) {
+          const productRef = doc(db, "products", item.id);
+          const productSnap = await getDoc(productRef);
+          if (productSnap.exists()) {
+            const currentStock = Number(productSnap.data().stock || 0);
+            const nextStock = Math.max(0, currentStock - item.quantity);
+            await updateDoc(productRef, { stock: nextStock });
+          }
+        }
+      } catch (err) {
+        console.warn("Stock sync skipped (permissions):", err.message);
+      }
 
       setLastOrder({
         id: savedRef.id,
@@ -960,7 +1093,7 @@ export default function CrunzzoDistributorDashboard() {
       setPendingSummaryAfterCustomer(false);
     } catch (error) {
       console.error("Submit sale error:", error);
-      alert("Failed to save sale in Firebase.");
+      alert(error.message || "Failed to save sale in Firebase.");
     } finally {
       setSubmittingOrder(false);
     }
@@ -969,9 +1102,8 @@ export default function CrunzzoDistributorDashboard() {
   const handleWhatsappShare = () => {
     if (!lastOrder) return;
 
-    const text = `Hello ${lastOrder.shopName || ""}, your Crunzzo order ${
-      lastOrder.invoiceNumber || ""
-    } of ${formatRupees(lastOrder.total || 0)} has been recorded successfully.`;
+    const text = `Hello ${lastOrder.shopName || ""}, your Crunzzo order ${lastOrder.invoiceNumber || ""
+      } of ${formatRupees(lastOrder.total || 0)} has been recorded successfully.`;
 
     const url = `https://wa.me/${lastOrder.phone || ""}?text=${encodeURIComponent(text)}`;
     window.open(url, "_blank");
@@ -1044,7 +1176,7 @@ export default function CrunzzoDistributorDashboard() {
 
   if (loadingProfile || loadingProducts || loadingOrders) {
     return (
-      <div className="bzd-page">
+      <div className="bzd-page" data-brand="crunzzo">
         <ThemeOverrides />
         <div className="bzd-shell bzd-shell-light">
           <div style={{ padding: "40px 0", textAlign: "center", color: "#7d879b" }}>
@@ -1057,7 +1189,7 @@ export default function CrunzzoDistributorDashboard() {
 
   if (!userProfile) {
     return (
-      <div className="bzd-page">
+      <div className="bzd-page" data-brand="crunzzo">
         <ThemeOverrides />
         <div className="bzd-shell bzd-shell-light">
           <div style={{ padding: "40px 0", textAlign: "center", color: "#7d879b" }}>
@@ -1070,7 +1202,7 @@ export default function CrunzzoDistributorDashboard() {
 
   if (screen === "profile") {
     return (
-      <div className="bzd-page">
+      <div className="bzd-page" data-brand="crunzzo">
         <ThemeOverrides />
         <div
           className="bzd-shell bzd-shell-light"
@@ -1117,21 +1249,34 @@ export default function CrunzzoDistributorDashboard() {
                   onClick={() => fileInputRef.current?.click()}
                   style={{
                     position: "absolute",
-                    right: -2,
-                    bottom: 6,
-                    width: 24,
-                    height: 24,
+                    right: -4,
+                    bottom: 2,
+                    width: 28,
+                    height: 28,
                     borderRadius: "50%",
-                    border: "2px solid #fff",
+                    border: "2.5px solid #fff",
                     background: BRAND_ACCENT,
                     color: "#fff",
-                    display: "grid",
-                    placeItems: "center",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
                     cursor: "pointer",
-                    fontSize: 12,
+                    boxShadow: "0 2px 8px rgba(0,0,0,0.15)",
                   }}
                 >
-                  📷
+                  <svg
+                    width="14"
+                    height="14"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="3"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  >
+                    <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" />
+                    <circle cx="12" cy="13" r="4" />
+                  </svg>
                 </button>
 
                 <input
@@ -1195,9 +1340,8 @@ export default function CrunzzoDistributorDashboard() {
                   marginTop: 14,
                   background: profileMessage.includes("successfully") ? "#eef9f0" : "#fff0f0",
                   color: profileMessage.includes("successfully") ? "#27944e" : "#d42424",
-                  border: `1px solid ${
-                    profileMessage.includes("successfully") ? "#d7f0dc" : "#ffd1d1"
-                  }`,
+                  border: `1px solid ${profileMessage.includes("successfully") ? "#d7f0dc" : "#ffd1d1"
+                    }`,
                   borderRadius: "12px",
                   padding: "10px 12px",
                   fontSize: "13px",
@@ -1350,6 +1494,10 @@ export default function CrunzzoDistributorDashboard() {
               <h3 style={{ margin: 0, fontSize: 20, color: "#20263a" }}>My Performance</h3>
               <button
                 type="button"
+                onClick={() => {
+                  setHistoryFilter("month");
+                  setScreen("history");
+                }}
                 style={{
                   border: "none",
                   background: "transparent",
@@ -1431,7 +1579,7 @@ export default function CrunzzoDistributorDashboard() {
                   icon="?"
                   title="Help & Support"
                   subtitle="FAQs and customer support"
-                  onClick={() => {}}
+                  onClick={() => { }}
                   accent={BRAND_ACCENT}
                 />
               </div>
@@ -1465,7 +1613,7 @@ export default function CrunzzoDistributorDashboard() {
 
   if (screen === "customer") {
     return (
-      <div className="bzd-page">
+      <div className="bzd-page" data-brand="crunzzo">
         <ThemeOverrides />
         <div className="bzd-shell bzd-shell-light">
           <div className="bzd-topbar-step">
@@ -1564,10 +1712,10 @@ export default function CrunzzoDistributorDashboard() {
 
   if (screen === "products") {
     return (
-      <div className="bzd-page">
+      <div className="czd-page" data-brand="crunzzo">
         <ThemeOverrides />
         <div
-          className="bzd-shell bzd-shell-light"
+          className="czd-shell czd-shell-light"
           style={{
             display: "flex",
             flexDirection: "column",
@@ -1583,22 +1731,22 @@ export default function CrunzzoDistributorDashboard() {
               paddingBottom: 14,
             }}
           >
-            <div className="bzd-topbar-step">
-              <button type="button" className="bzd-back-btn" onClick={() => setScreen("customer")}>
+            <div className="czd-topbar-step">
+              <button type="button" className="czd-back-btn" onClick={() => setScreen("customer")}>
                 ←
               </button>
 
-              <div className="bzd-step-center">
+              <div className="czd-step-center">
                 <small>STEP 2 OF 4</small>
                 <h2>Product Selection</h2>
               </div>
 
-              <button type="button" className="bzd-info-btn">
+              <button type="button" className="czd-info-btn">
                 i
               </button>
             </div>
 
-            <div className="bzd-search-wrap">
+            <div className="czd-search-wrap">
               <input
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
@@ -1606,7 +1754,7 @@ export default function CrunzzoDistributorDashboard() {
               />
             </div>
 
-            <div className="bzd-filter-row">
+            <div className="czd-filter-row">
               {categoryTabs.map((tab) => (
                 <button
                   key={tab}
@@ -1634,36 +1782,51 @@ export default function CrunzzoDistributorDashboard() {
                 No products available. Please ask admin to upload products first.
               </div>
             ) : (
-              <div className="bzd-product-grid">
+              <div className="czd-product-grid">
                 {filteredProducts.map((product) => {
                   const qty = cart[product.id] || 0;
 
                   return (
-                    <div className="bzd-product-card" key={product.id}>
-                      <div className="bzd-product-thumb">{renderProductVisual(product)}</div>
+                    <div className="czd-product-card" key={product.id}>
+                      <div className="czd-product-thumb">{renderProductVisual(product)}</div>
 
-                      <div className="bzd-product-meta">
+                      <div className="czd-product-meta">
                         <h4>{product.name}</h4>
                         <p>{product.description || product.category || "-"}</p>
+                        <small style={{ color: Number(product.stock || 0) <= 0 ? BRAND_ACCENT : "#7d879b", fontWeight: 700 }}>
+                          {Number(product.stock || 0) <= 0 ? "OUT OF STOCK" : `${product.stock} Units Available`}
+                        </small>
                       </div>
 
                       {qty > 0 ? (
-                        <div className="bzd-qty-row">
+                        <div className="czd-qty-row">
                           <button type="button" onClick={() => removeFromCart(product.id)}>
                             −
                           </button>
                           <span>{qty}</span>
-                          <button type="button" onClick={() => addToCart(product.id)}>
+                          <button
+                            type="button"
+                            onClick={() => addToCart(product.id)}
+                            disabled={qty >= Number(product.stock || 0)}
+                            style={{ opacity: qty >= Number(product.stock || 0) ? 0.5 : 1 }}
+                          >
                             +
                           </button>
                         </div>
                       ) : (
                         <button
                           type="button"
-                          className="bzd-add-btn"
+                          className="czd-add-btn"
                           onClick={() => addToCart(product.id)}
+                          disabled={Number(product.stock || 0) <= 0}
+                          style={{
+                            background: Number(product.stock || 0) <= 0 ? `${BRAND_ACCENT}18` : undefined,
+                            color: Number(product.stock || 0) <= 0 ? BRAND_ACCENT : undefined,
+                            cursor: Number(product.stock || 0) <= 0 ? "not-allowed" : "pointer",
+                            border: Number(product.stock || 0) <= 0 ? `1.5px solid ${BRAND_ACCENT}40` : undefined,
+                          }}
                         >
-                          ADD
+                          {Number(product.stock || 0) <= 0 ? "SOLD OUT" : "ADD"}
                         </button>
                       )}
                     </div>
@@ -1689,14 +1852,14 @@ export default function CrunzzoDistributorDashboard() {
                 gap: 12,
               }}
             >
-              <div className="bzd-review-total">
+              <div className="czd-review-total">
                 <small>{totalUnits} ITEMS SELECTED</small>
                 <strong>{formatRupees(subtotal)} Total</strong>
               </div>
 
               <button
                 type="button"
-                className="bzd-review-btn"
+                className="czd-review-btn"
                 disabled={!selectedItems.length}
                 onClick={moveToSummary}
               >
@@ -1713,7 +1876,7 @@ export default function CrunzzoDistributorDashboard() {
 
   if (screen === "summary") {
     return (
-      <div className="bzd-page">
+      <div className="bzd-page" data-brand="crunzzo">
         <ThemeOverrides />
         <div className="bzd-shell bzd-shell-light">
           <div className="bzd-topbar-step">
@@ -1781,17 +1944,7 @@ export default function CrunzzoDistributorDashboard() {
               <small>TOTAL SALE VALUE</small>
               <strong>{formatRupees(totalSaleValue)}</strong>
             </div>
-            <button type="button" onClick={handleDownloadCurrentInvoice}>🧾</button>
           </div>
-
-          <button
-            type="button"
-            className="bzd-secondary-btn"
-            onClick={handleDownloadCurrentInvoice}
-            style={{ marginTop: 12, marginBottom: 12 }}
-          >
-            Download Invoice
-          </button>
 
           <button
             type="button"
@@ -1808,7 +1961,7 @@ export default function CrunzzoDistributorDashboard() {
 
   if (screen === "success") {
     return (
-      <div className="bzd-page">
+      <div className="bzd-page" data-brand="crunzzo">
         <ThemeOverrides />
         <div className="bzd-shell bzd-shell-light">
           <div className="bzd-topbar-step">
@@ -1846,15 +1999,15 @@ export default function CrunzzoDistributorDashboard() {
                 </div>
 
                 <div className="bzd-success-actions">
-                  <button type="button" className="whatsapp" onClick={handleWhatsappShare}>
-                    🟢
-                  </button>
                   <button
                     type="button"
-                    className="receipt"
-                    onClick={() => downloadInvoiceFile(lastOrder)}
+                    className="whatsapp"
+                    onClick={handleWhatsappShare}
+                    style={{ background: "#25D366", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center" }}
                   >
-                    🧾
+                    <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
+                      <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.414 0 .018 5.396.015 12.03a11.811 11.811 0 001.592 5.96L0 24l6.117-1.605a11.82 11.82 0 005.925 1.587h.005c6.632 0 12.032-5.4 12.035-12.034a11.84 11.84 0 00-3.527-8.498z" />
+                    </svg>
                   </button>
                 </div>
               </div>
@@ -1884,7 +2037,7 @@ export default function CrunzzoDistributorDashboard() {
 
   if (screen === "history") {
     return (
-      <div className="bzd-page">
+      <div className="bzd-page" data-brand="crunzzo">
         <ThemeOverrides />
         <div
           className="bzd-shell bzd-shell-light"
@@ -1896,22 +2049,40 @@ export default function CrunzzoDistributorDashboard() {
                 ←
               </button>
               <h2>Daily Sales History</h2>
-              <button type="button" className="bzd-cal-btn">🗓</button>
+              <span className="bzd-top-placeholder" />
             </div>
 
             <div className="bzd-history-hero">
-              <small>Total Sales Today</small>
-              <strong>{formatRupees(todayRevenue)}</strong>
-              <span>{orders.length} Transactions</span>
+              <small>
+                {getFilterLabel(historyFilter, startDate, endDate)}
+              </small>
+              <strong>{formatRupees(historyTotal)}</strong>
+              <span>{filteredOrders.length} Transactions</span>
             </div>
+
+            <HistoryDateFilter
+              historyFilter={historyFilter}
+              setHistoryFilter={setHistoryFilter}
+              startDate={startDate}
+              setStartDate={setStartDate}
+              endDate={endDate}
+              setEndDate={setEndDate}
+              accentColor={BRAND_ACCENT}
+            />
 
             <div className="bzd-search-wrap bzd-history-search">
-              <input placeholder="Search shop name, ID..." />
+              <input
+                placeholder="Search shop name, ID..."
+                value={historySearch}
+                onChange={(e) => setHistorySearch(e.target.value)}
+              />
             </div>
 
-            <div className="bzd-history-day">TODAY</div>
+            <div className="bzd-history-day">
+              {getFilterHeading(historyFilter, startDate, endDate)}
+            </div>
 
-            {!orders.length ? (
+            {!filteredOrders.length ? (
               <div
                 style={{
                   background: "#fff",
@@ -1926,7 +2097,7 @@ export default function CrunzzoDistributorDashboard() {
               </div>
             ) : (
               <div className="bzd-history-list">
-                {orders.map((item, index) => (
+                {filteredOrders.map((item, index) => (
                   <div className="bzd-history-row" key={item.id}>
                     <div
                       className="bzd-history-avatar"
@@ -1954,7 +2125,7 @@ export default function CrunzzoDistributorDashboard() {
   }
 
   return (
-    <div className="bzd-page">
+    <div className="bzd-page" data-brand="crunzzo">
       <ThemeOverrides />
       <div
         className="bzd-shell bzd-shell-home"
@@ -2032,9 +2203,8 @@ export default function CrunzzoDistributorDashboard() {
               {recentActivity.map((item, index) => (
                 <div className="bzd-activity-card" key={item.id}>
                   <div
-                    className={`bzd-activity-icon ${
-                      index % 3 === 0 ? "red" : index % 3 === 1 ? "orange" : "purple"
-                    }`}
+                    className={`bzd-activity-icon ${index % 3 === 0 ? "red" : index % 3 === 1 ? "orange" : "purple"
+                      }`}
                   >
                     🏪
                   </div>

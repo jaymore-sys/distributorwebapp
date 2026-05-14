@@ -507,6 +507,7 @@
   align-items: center;
   gap: 8px;
   margin-top: 10px;
+  height: 34px;
 }
 
 .bzd-qty-row button {
