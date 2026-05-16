@@ -7,6 +7,8 @@ import {
   signInWithEmailAndPassword,
   signOut,
   updateProfile,
+  GoogleAuthProvider,
+  signInWithPopup,
 } from "firebase/auth";
 import { doc, getDoc, setDoc, serverTimestamp } from "firebase/firestore";
 
@@ -70,16 +72,7 @@ function GoogleIcon() {
   );
 }
 
-function PhoneIcon() {
-  return (
-    <svg className="crz-social-svg" viewBox="0 0 24 24" aria-hidden="true">
-      <path
-        fill="#EA7A31"
-        d="M6.62 10.79a15.46 15.46 0 0 0 6.59 6.59l2.2-2.2a1.5 1.5 0 0 1 1.53-.36c1.01.34 2.1.52 3.22.52A1.5 1.5 0 0 1 21.66 16v3.5A1.5 1.5 0 0 1 20.16 21C10.68 21 3 13.32 3 3.84A1.5 1.5 0 0 1 4.5 2.34H8A1.5 1.5 0 0 1 9.5 3.84c0 1.12.18 2.21.52 3.22a1.5 1.5 0 0 1-.36 1.53l-2.04 2.2z"
-      />
-    </svg>
-  );
-}
+
 
 const brandMap = {
   valencia: {
@@ -344,6 +337,52 @@ export default function LoginPage({ setUserProfile }) {
     }
   };
 
+  const handleGoogleLogin = async () => {
+    setError("");
+    setInfoMessage("");
+
+    try {
+      setLoading(true);
+      // Ensure we are using the correct backend before auth
+      setSelectedBackend(selectedBrand.backend);
+
+      const provider = new GoogleAuthProvider();
+      provider.setCustomParameters({ prompt: "select_account" });
+
+      const result = await signInWithPopup(auth, provider);
+      const user = result.user;
+
+      // Check if user exists in the specific backend's Firestore
+      const userRef = doc(db, "users", user.uid);
+      const userSnap = await getDoc(userRef);
+
+      if (!userSnap.exists()) {
+        setError("Account not found. Please create an account first.");
+        await signOut(auth);
+        return;
+      }
+
+      const profileData = userSnap.data();
+
+      const finalProfile = {
+        uid: user.uid,
+        email: user.email,
+        ...profileData,
+      };
+
+      if (setUserProfile) {
+        setUserProfile(finalProfile);
+      }
+
+      goByRole(finalProfile);
+    } catch (err) {
+      console.error("Google login error:", err);
+      setError(getErrorMessage(err));
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return (
     <div className={`crz-auth-page ${selectedBrand.accent}`}>
       <div className="crz-auth-card">
@@ -429,15 +468,17 @@ export default function LoginPage({ setUserProfile }) {
             </div>
 
             <div className="crz-social-stack">
-              <button type="button" className="crz-social-btn">
+              <button
+                type="button"
+                className="crz-social-btn"
+                onClick={handleGoogleLogin}
+                disabled={loading}
+              >
                 <GoogleIcon />
                 <span>Login with Google</span>
               </button>
 
-              <button type="button" className="crz-social-btn">
-                <PhoneIcon />
-                <span>Login with Phone Number</span>
-              </button>
+
             </div>
           </form>
         ) : (
