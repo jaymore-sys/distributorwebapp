@@ -51,11 +51,20 @@
   width: 40px;
   height: 40px;
   border-radius: 999px;
+  border: 0;
   background: #f0e3db;
   color: #8a5723;
   display: grid;
   place-items: center;
   font-weight: 800;
+  overflow: hidden;
+  padding: 0;
+  cursor: pointer;
+}
+
+.czd-user-avatar:focus-visible {
+  outline: 2px solid #e51f28;
+  outline-offset: 3px;
 }
 
 .czd-home-left h3 {
@@ -479,7 +488,7 @@
   display: block;
   color: #7d879b;
   font-size: 11px;
-  margin-bottom: 5px;
+  margin-top: 3px;
 }
 
 .czd-product-meta h4 {
@@ -489,14 +498,350 @@
   line-height: 1.35;
 }
 
+.czd-product-meta p {
+  margin: 7px 0 0;
+  color: #7d879b;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.czd-product-price {
+  display: block;
+  margin-top: 6px;
+  color: #ef1d1d;
+  font-size: 14px;
+  font-weight: 900;
+  line-height: 1.2;
+}
+
+.czd-pack-options {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.czd-pack-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  min-height: 46px;
+  padding: 8px;
+  border: 1px solid #ececec;
+  border-radius: 12px;
+  background: #fffafa;
+}
+
+.czd-pack-copy {
+  min-width: 0;
+}
+
+.czd-pack-copy strong {
+  display: block;
+  color: #20263a;
+  font-size: 12px;
+  font-weight: 900;
+  line-height: 1.2;
+}
+
+.czd-pack-copy span {
+  display: block;
+  margin-top: 3px;
+  color: #7d879b;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+.czd-pack-add,
+.czd-pack-qty button {
+  border: none;
+  border-radius: 999px;
+  background: linear-gradient(180deg, #ff2d2d 0%, #ec1717 100%);
+  color: #fff;
+  font-weight: 900;
+  cursor: pointer;
+}
+
+.czd-pack-add {
+  width: 46px;
+  height: 30px;
+  font-size: 11px;
+}
+
+.czd-pack-add:disabled,
+.czd-pack-qty button:disabled {
+  background: #fde4e4;
+  color: #ef1d1d;
+  cursor: not-allowed;
+}
+
+.czd-pack-qty {
+  display: grid;
+  grid-template-columns: 28px 24px 28px;
+  align-items: center;
+  gap: 4px;
+}
+
+.czd-pack-qty button {
+  width: 28px;
+  height: 28px;
+  font-size: 14px;
+  line-height: 1;
+}
+
+.czd-pack-qty span {
+  text-align: center;
+  color: #20263a;
+  font-size: 12px;
+  font-weight: 900;
+}
+
 .czd-add-btn {
   width: 100%;
-  height: 34px;
+  height: 42px;
   border-radius: 999px;
   margin-top: 10px;
   background: linear-gradient(180deg, #ff2d2d 0%, #ec1717 100%);
   color: #fff;
   font-size: 13px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  line-height: 1.1;
+}
+
+.czd-add-btn small {
+  display: block;
+  font-size: 10px;
+  font-weight: 500;
+  margin-top: 2px;
+  opacity: 0.9;
+}
+
+.czd-options-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.4);
+}
+
+.czd-options-sheet {
+  position: relative;
+  width: 100%;
+  max-width: 430px;
+  max-height: 90vh;
+  overflow-y: auto;
+  background: #ffffff;
+  border-radius: 24px 24px 0 0;
+  padding: 20px;
+}
+
+.czd-options-close {
+  position: absolute;
+  top: -45px;
+  left: 50%;
+  width: 32px;
+  height: 32px;
+  transform: translateX(-50%);
+  border: none;
+  border-radius: 50%;
+  background: #fff;
+  color: #20263a;
+  font-size: 14px;
+  font-weight: 800;
+  cursor: pointer;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
+}
+
+.czd-options-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.czd-options-header .bzd-back-btn {
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  margin-top: -2px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.czd-options-header h3 {
+  margin: 0;
+  color: #20263a;
+  font-size: 16px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.czd-options-header p {
+  margin: 2px 0 0;
+  color: #7d879b;
+  font-size: 13px;
+}
+
+.czd-options-list {
+  display: grid;
+  gap: 12px;
+  margin-bottom: 24px;
+}
+
+.czd-option-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px;
+  background: #fff;
+  border: 1px solid #eee;
+  border-radius: 12px;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.02);
+}
+
+.czd-option-thumb {
+  width: 48px;
+  height: 48px;
+  flex: 0 0 48px;
+  overflow: hidden;
+  background: #fafafa;
+  border-radius: 8px;
+}
+
+.czd-option-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.czd-option-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.czd-option-label {
+  color: #20263a;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.czd-option-price {
+  margin-top: 2px;
+  color: #20263a;
+  font-size: 14px;
+  font-weight: 800;
+}
+
+.czd-option-stock {
+  margin-top: 2px;
+  color: #7d879b;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0;
+}
+
+.czd-option-stock.is-out {
+  color: #ef1d1d;
+  font-weight: 900;
+}
+
+.czd-option-add {
+  height: 32px;
+  padding: 0 20px;
+  border: none;
+  border-radius: 999px;
+  background: #ef1d1d;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.czd-option-add:disabled,
+.czd-option-add.is-disabled {
+  background: #f5cfcf;
+  color: #bf1515;
+  box-shadow: none;
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.czd-option-qty {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.czd-option-qty button {
+  width: 28px;
+  height: 28px;
+  border: 1px solid #ddd;
+  border-radius: 50%;
+  background: #fff;
+  color: #20263a;
+  font-size: 16px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.czd-option-qty button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.czd-option-qty span {
+  min-width: 20px;
+  text-align: center;
+  color: #20263a;
+  font-weight: 800;
+}
+
+.czd-options-footer {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  padding: 12px;
+  border-radius: 18px;
+  background: linear-gradient(180deg, #ff2d2d 0%, #ec1717 100%);
+  color: #fff;
+}
+
+.czd-options-footer-total small {
+  display: block;
+  margin-bottom: 2px;
+  font-size: 10px;
+  opacity: 0.9;
+}
+
+.czd-options-footer-total strong {
+  font-size: 18px;
+}
+
+.czd-options-review-btn {
+  border: none;
+  background: transparent;
+  color: #fff;
+  font-size: 14px;
+  font-weight: 800;
+  text-align: right;
+  cursor: pointer;
+}
+
+.czd-options-review-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
 }
 
 .czd-qty-row {

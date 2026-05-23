@@ -47,11 +47,20 @@
   width: 40px;
   height: 40px;
   border-radius: 999px;
+  border: 0;
   background: #f0e3db;
   color: #8a5723;
   display: grid;
   place-items: center;
   font-weight: 800;
+  overflow: hidden;
+  padding: 0;
+  cursor: pointer;
+}
+
+.vld-user-avatar:focus-visible {
+  outline: 2px solid #b75118;
+  outline-offset: 3px;
 }
 
 .vld-home-left h3 {
@@ -487,10 +496,25 @@
 }
 
 .vld-product-meta p {
-  margin: 6px 0 0;
+  margin: 7px 0 0;
   color: #7d879b;
   font-size: 12px;
   line-height: 1.35;
+}
+
+.vld-product-meta small {
+  display: block;
+  margin-top: 3px;
+  font-size: 11px;
+}
+
+.vld-product-price {
+  display: block;
+  margin-top: 6px;
+  color: #ef6a1d;
+  font-size: 14px;
+  font-weight: 900;
+  line-height: 1.2;
 }
 
 .vld-add-btn {

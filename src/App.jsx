@@ -20,14 +20,14 @@ export default function App() {
       <Route path="/choose-section" element={<ChooseSectionPage />} />
       <Route path="/login" element={<LoginPage />} />
 
-      <Route path="/crunzzo/dashboard" element={<CrunzzoDistributorDashboard />} />
-      <Route path="/crunzzo/admin" element={<CrunzzoAdminDashboard />} />
+      <Route path="/crunzzo/distributor/:tab?" element={<CrunzzoDistributorDashboard />} />
+      <Route path="/crunzzo/admin/:tab?" element={<CrunzzoAdminDashboard />} />
 
-      <Route path="/bounce/dashboard" element={<BounceDistributorDashboard />} />
-      <Route path="/bounce/admin" element={<BounceAdminDashboard />} />
+      <Route path="/bounce/distributor/:tab?" element={<BounceDistributorDashboard />} />
+      <Route path="/bounce/admin/:tab?" element={<BounceAdminDashboard />} />
 
-      <Route path="/valencia/dashboard" element={<ValenciaDistributorDashboard />} />
-      <Route path="/valencia/admin" element={<ValenciaAdminDashboard />} />
+      <Route path="/valencia/distributor/:tab?" element={<ValenciaDistributorDashboard />} />
+      <Route path="/valencia/admin/:tab?" element={<ValenciaAdminDashboard />} />
 
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

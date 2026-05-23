@@ -13,7 +13,19 @@ import {
 } from "firebase/firestore";
 import { getDownloadURL, ref, uploadBytes } from "firebase/storage";
 import crunzzoLogo from "../../assets/crunzzologo.png";
+import AdminProfileEditor from "../../components/AdminProfileEditor";
+import CategoryModal from "../../components/CategoryModal";
 import { getFirebaseServices } from "../../firebase";
+import { routeToChooseSelection, usePortalHistoryManager } from "../../navigation/globalNavigationManager";
+import {
+  CRUNZZO_PACKS,
+  buildCrunzzoPackOptionsFromForm,
+  getCrunzzoInventoryValue,
+  getCrunzzoTotalUnits,
+  isCrunzzoLowStock,
+  normalizeCrunzzoPackOptions,
+} from "../../utils/crunzzoPacks";
+import HistoryDateFilter, { getFilterLabel, getFilterHeading } from "../../components/HistoryDateFilter";
 
 const { auth, db, storage } = getFirebaseServices("crunzzo");
 
@@ -23,9 +35,25 @@ const MUTED = "#7d879b";
 const BG = "#f6f6f6";
 const CARD = "#ffffff";
 const BORDER = "#ececec";
+const PRODUCT_LABEL_STYLE = {
+  fontSize: 13,
+  fontWeight: 900,
+  color: TEXT,
+  lineHeight: 1.25,
+  overflowWrap: "anywhere",
+};
+const PRODUCT_FIELD_TEXT_STYLE = {
+  width: "100%",
+  maxWidth: "100%",
+  boxSizing: "border-box",
+  fontSize: 14,
+  fontWeight: 700,
+  color: TEXT,
+};
 
 const ZONES = ["Chennai", "Hyderabad", "Tamil Nadu", "Karnataka"];
 const CATEGORY_OPTIONS = ["Chips", "Puffs", "Namkeen", "Masala", "Snacks"];
+const ADD_CATEGORY_VALUE = "__add_new_category__";
 const PRICING_GROUPS = ["Standard Retail", "Wholesale", "Distributor"];
 
 function formatRupees(value) {
@@ -66,21 +94,29 @@ function getTopSku(orders) {
   const map = {};
   orders.forEach((order) => {
     (order.items || []).forEach((item) => {
-      const key = item.name || "Unknown SKU";
-      map[key] = (map[key] || 0) + Number(item.quantity || 0);
+      const key = item.productId || item.name || "Unknown SKU";
+      if (!map[key]) {
+        map[key] = {
+          productId: item.productId || "",
+          name: item.name || "Unknown SKU",
+          imageUrl: item.imageUrl || "",
+          units: 0,
+        };
+      }
+      map[key].units += Number(item.quantity || 0);
     });
   });
 
-  const entries = Object.entries(map).sort((a, b) => b[1] - a[1]);
-  if (!entries.length) return { name: "No sales yet", units: 0 };
-  return { name: entries[0][0], units: entries[0][1] };
+  const entries = Object.values(map).sort((a, b) => b.units - a.units);
+  if (!entries.length) return { productId: "", name: "No sales yet", imageUrl: "", units: 0 };
+  return entries[0];
 }
 
-function getZoneStats(orders) {
+function getPincodeStats(orders) {
   const map = {};
   orders.forEach((order) => {
-    const zone = order.salesZone || "Unassigned";
-    map[zone] = (map[zone] || 0) + Number(order.total || 0);
+    const pincode = String(order.salesPincode || order.pincode || "").trim() || "Unassigned";
+    map[pincode] = (map[pincode] || 0) + Number(order.total || 0);
   });
 
   const entries = Object.entries(map).sort((a, b) => b[1] - a[1]);
@@ -100,14 +136,19 @@ function AdminTab({ active, label, onClick }) {
       onClick={onClick}
       style={{
         flex: 1,
-        height: 50,
+        height: 40,
         border: "none",
-        borderRadius: 16,
+        borderRadius: 12,
         background: active ? "#fdeeee" : "transparent",
         color: active ? BRAND : "#6d7890",
         fontWeight: 700,
-        fontSize: 14,
+        fontSize: 12,
         cursor: "pointer",
+        minWidth: 0,
+        overflow: "hidden",
+        textOverflow: "ellipsis",
+        whiteSpace: "nowrap",
+        padding: "0 4px",
       }}
     >
       {label}
@@ -143,7 +184,7 @@ function StatCard({ title, value, subtitle }) {
   );
 }
 
-function SectionCard({ children }) {
+function SectionCard({ children, style }) {
   return (
     <div
       style={{
@@ -151,6 +192,7 @@ function SectionCard({ children }) {
         border: `1px solid ${BORDER}`,
         borderRadius: 18,
         padding: 16,
+        ...style,
       }}
     >
       {children}
@@ -163,6 +205,7 @@ export default function CrunzzoAdminDashboard() {
   const fileInputRef = useRef(null);
 
   const [activeTab, setActiveTab] = useState("dashboard");
+  const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
   const [loading, setLoading] = useState(true);
   const [userProfile, setUserProfile] = useState(null);
 
@@ -171,6 +214,9 @@ export default function CrunzzoAdminDashboard() {
 
   const [inventorySearch, setInventorySearch] = useState("");
   const [salesSearch, setSalesSearch] = useState("");
+  const [historyFilter, setHistoryFilter] = useState("today");
+  const [startDate, setStartDate] = useState(null);
+  const [endDate, setEndDate] = useState(null);
 
   const [savingProduct, setSavingProduct] = useState(false);
   const [productMessage, setProductMessage] = useState("");
@@ -180,16 +226,37 @@ export default function CrunzzoAdminDashboard() {
 
   const [productForm, setProductForm] = useState({
     name: "",
-    rate: "",
     pricingGroup: "Standard Retail",
-    gst: "18",
     description: "",
     skuCode: "",
-    unitLabel: "Units",
-    stock: "0",
-    lowStockThreshold: "20",
     category: "Chips",
     zones: [],
+    pack12PricingGroup: "Standard Retail",
+    pack12Rate: "",
+    pack12Stock: "0",
+    pack12Gst: "18",
+    pack12LowStockThreshold: "20",
+    pack240PricingGroup: "Standard Retail",
+    pack240Rate: "",
+    pack240Stock: "0",
+    pack240Gst: "18",
+    pack240LowStockThreshold: "2",
+  });
+  const [customCategoryOptions, setCustomCategoryOptions] = useState([]);
+  const [categoryModalOpen, setCategoryModalOpen] = useState(false);
+  const [newCategoryName, setNewCategoryName] = useState("");
+  const [newCategoryError, setNewCategoryError] = useState("");
+  const [editingProductId, setEditingProductId] = useState(null);
+  const [editingProductForm, setEditingProductForm] = useState({});
+  const [savingProductEdit, setSavingProductEdit] = useState(false);
+
+  const goToTab = usePortalHistoryManager({
+    portalKey: "crunzzo-admin",
+    basePath: "/crunzzo/admin",
+    rootScreen: "dashboard",
+    currentScreen: activeTab,
+    setScreen: setActiveTab,
+    onRootBack: () => setShowLogoutConfirm(true),
   });
 
   useEffect(() => {
@@ -200,6 +267,7 @@ export default function CrunzzoAdminDashboard() {
       if (!user) {
         setUserProfile(null);
         setLoading(false);
+        routeToChooseSelection(navigate);
         return;
       }
 
@@ -240,7 +308,7 @@ export default function CrunzzoAdminDashboard() {
       unsubProducts();
       unsubOrders();
     };
-  }, []);
+  }, [navigate]);
 
   const totalSalesValue = useMemo(
     () => orders.reduce((sum, item) => sum + Number(item.total || 0), 0),
@@ -248,19 +316,12 @@ export default function CrunzzoAdminDashboard() {
   );
 
   const inventoryValue = useMemo(
-    () =>
-      products.reduce(
-        (sum, item) => sum + Number(item.stock || 0) * Number(item.rate || 0),
-        0
-      ),
+    () => products.reduce((sum, item) => sum + getCrunzzoInventoryValue(item), 0),
     [products]
   );
 
   const lowStockCount = useMemo(
-    () =>
-      products.filter(
-        (item) => Number(item.stock || 0) <= Number(item.lowStockThreshold || 20)
-      ).length,
+    () => products.filter((item) => isCrunzzoLowStock(item)).length,
     [products]
   );
 
@@ -275,22 +336,68 @@ export default function CrunzzoAdminDashboard() {
   }, [products, inventorySearch]);
 
   const filteredSales = useMemo(() => {
-    const q = salesSearch.trim().toLowerCase();
-    if (!q) return orders;
+    const now = new Date();
+    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
 
-    return orders.filter((item) => {
-      const text = `${item.shopName || ""} ${item.distributorName || ""} ${item.distributorId || ""}`.toLowerCase();
-      return text.includes(q);
+    // Start of week
+    const d1 = new Date(now);
+    const day = d1.getDay();
+    const diff = d1.getDate() - day + (day === 0 ? -6 : 1);
+    const startOfWeek = new Date(d1.setDate(diff)).setHours(0, 0, 0, 0);
+
+    // Start of month
+    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
+
+    return orders.filter((order) => {
+      const ts = Number(order.createdAtMs || 0);
+      let timeMatch = true;
+      if (historyFilter === "today") timeMatch = ts >= startOfToday;
+      else if (historyFilter === "week") timeMatch = ts >= startOfWeek;
+      else if (historyFilter === "month") timeMatch = ts >= startOfMonth;
+      else if (historyFilter === "date" && startDate) {
+        const selStart = new Date(startDate.getFullYear(), startDate.getMonth(), startDate.getDate()).getTime();
+        const selEnd = endDate
+          ? new Date(endDate.getFullYear(), endDate.getMonth(), endDate.getDate()).getTime() + 86400000
+          : selStart + 86400000;
+        timeMatch = ts >= selStart && ts < selEnd;
+      }
+      else if (historyFilter === "all") timeMatch = true;
+
+      const q = salesSearch.trim().toLowerCase();
+      const searchMatch =
+        !q ||
+        `${order.shopName || ""} ${order.distributorName || ""} ${order.distributorId || ""}`
+          .toLowerCase()
+          .includes(q);
+
+      return timeMatch && searchMatch;
     });
-  }, [orders, salesSearch]);
+  }, [orders, salesSearch, historyFilter, startDate, endDate]);
+
+  const salesTotal = useMemo(() => {
+    return filteredSales.reduce((sum, item) => sum + Number(item.total || 0), 0);
+  }, [filteredSales]);
 
   const topSku = useMemo(() => getTopSku(orders), [orders]);
-  const zoneStats = useMemo(() => getZoneStats(orders), [orders]);
+  const topSkuProduct = useMemo(() => {
+    const topName = (topSku.name || "").trim().toLowerCase();
+    return products.find((item) => {
+      return item.id === topSku.productId || (item.name || "").trim().toLowerCase() === topName;
+    });
+  }, [products, topSku]);
+  const pincodeStats = useMemo(() => getPincodeStats(orders), [orders]);
+  const categoryOptions = useMemo(() => {
+    const productCategories = products.map((item) => item.category || "");
+    return [...new Set([...CATEGORY_OPTIONS, ...customCategoryOptions, ...productCategories, productForm.category])]
+      .map((item) => String(item).trim())
+      .filter(Boolean);
+  }, [customCategoryOptions, productForm.category, products]);
 
   const handleLogout = async () => {
     try {
       await signOut(auth);
-      navigate("/login?section=crunzzo", { replace: true });
+      setShowLogoutConfirm(false);
+      routeToChooseSelection(navigate);
     } catch (error) {
       console.error("Logout failed:", error);
     }
@@ -300,7 +407,12 @@ export default function CrunzzoAdminDashboard() {
     const { name, value } = e.target;
     let finalValue = value;
 
-    if (["rate", "stock", "lowStockThreshold", "gst"].includes(name)) {
+    if (
+      name.includes("Rate") ||
+      name.includes("Stock") ||
+      name.includes("Gst") ||
+      name.includes("LowStockThreshold")
+    ) {
       finalValue = sanitizeNumber(value);
     }
 
@@ -308,6 +420,71 @@ export default function CrunzzoAdminDashboard() {
     setProductForm((prev) => ({
       ...prev,
       [name]: finalValue,
+    }));
+  };
+
+  const addCustomCategory = (rawValue) => {
+    const cleaned = rawValue.trim().replace(/\s+/g, " ");
+    if (!cleaned) return;
+
+    setProductMessage("");
+    setCustomCategoryOptions((prev) => {
+      const exists = prev.some((item) => item.toLowerCase() === cleaned.toLowerCase());
+      return exists ? prev : [...prev, cleaned];
+    });
+    setProductForm((prev) => ({
+      ...prev,
+      category: cleaned,
+    }));
+  };
+
+  const openCategoryModal = () => {
+    setNewCategoryName("");
+    setNewCategoryError("");
+    setCategoryModalOpen(true);
+  };
+
+  const closeCategoryModal = () => {
+    setCategoryModalOpen(false);
+    setNewCategoryName("");
+    setNewCategoryError("");
+  };
+
+  const submitNewCategory = (event) => {
+    event.preventDefault();
+
+    const cleaned = newCategoryName.trim().replace(/\s+/g, " ");
+    if (!cleaned) {
+      setNewCategoryError("Please enter a category name.");
+      return;
+    }
+
+    const existing = categoryOptions.find((item) => item.toLowerCase() === cleaned.toLowerCase());
+    if (existing) {
+      setProductForm((prev) => ({
+        ...prev,
+        category: existing,
+      }));
+      closeCategoryModal();
+      return;
+    }
+
+    addCustomCategory(cleaned);
+    closeCategoryModal();
+  };
+
+  const handleProductCategoryChange = (event) => {
+    const { value } = event.target;
+
+    if (value === ADD_CATEGORY_VALUE) {
+      openCategoryModal();
+      return;
+    }
+
+    setProductMessage("");
+    setProductForm((prev) => ({
+      ...prev,
+      category: value,
     }));
   };
 
@@ -349,16 +526,21 @@ export default function CrunzzoAdminDashboard() {
   const resetProductForm = () => {
     setProductForm({
       name: "",
-      rate: "",
       pricingGroup: "Standard Retail",
-      gst: "18",
       description: "",
       skuCode: "",
-      unitLabel: "Units",
-      stock: "0",
-      lowStockThreshold: "20",
       category: "Chips",
       zones: [],
+      pack12PricingGroup: "Standard Retail",
+      pack12Rate: "",
+      pack12Stock: "0",
+      pack12Gst: "18",
+      pack12LowStockThreshold: "20",
+      pack240PricingGroup: "Standard Retail",
+      pack240Rate: "",
+      pack240Stock: "0",
+      pack240Gst: "18",
+      pack240LowStockThreshold: "2",
     });
     setImageFile(null);
     setImagePreview("");
@@ -371,8 +553,10 @@ export default function CrunzzoAdminDashboard() {
       return;
     }
 
-    if (!productForm.rate.trim()) {
-      setProductMessage("Please enter product rate.");
+    const packOptions = buildCrunzzoPackOptionsFromForm(productForm);
+    const invalidPack = packOptions.find((pack) => Number(pack.rate || 0) <= 0);
+    if (invalidPack) {
+      setProductMessage(`Please enter price for ${invalidPack.label}.`);
       return;
     }
 
@@ -394,19 +578,25 @@ export default function CrunzzoAdminDashboard() {
       await uploadBytes(storageRef, imageFile);
       const imageUrl = await getDownloadURL(storageRef);
 
+      const totalStockUnits = getCrunzzoTotalUnits(packOptions);
+      const primaryPack = packOptions[0];
+
       await addDoc(collection(db, "products"), {
         name: productForm.name.trim(),
-        rate: Number(productForm.rate || 0),
-        pricingGroup: productForm.pricingGroup,
-        gst: Number(productForm.gst || 0),
+        rate: primaryPack.rate,
+        price: primaryPack.rate,
+        pricingGroup: primaryPack.pricingGroup,
+        gst: primaryPack.gst,
         description: productForm.description.trim(),
         skuCode: productForm.skuCode.trim(),
-        unitLabel: productForm.unitLabel.trim() || "Units",
-        stock: Number(productForm.stock || 0),
-        openingStock: Number(productForm.stock || 0),
-        lowStockThreshold: Number(productForm.lowStockThreshold || 20),
+        unitLabel: "Packs",
+        stock: totalStockUnits,
+        openingStock: totalStockUnits,
+        lowStockThreshold: Math.min(...packOptions.map((pack) => Number(pack.lowStockThreshold || 0))),
         category: productForm.category,
         zones: productForm.zones,
+        packSellingMode: "fixed-packs",
+        packOptions,
         imageUrl,
         status: "active",
         createdAt: serverTimestamp(),
@@ -415,23 +605,12 @@ export default function CrunzzoAdminDashboard() {
 
       setProductMessage("Product saved successfully.");
       resetProductForm();
-      setActiveTab("inventory");
+      goToTab("inventory");
     } catch (error) {
       console.error("Save product failed:", error);
       setProductMessage("Failed to save product.");
     } finally {
       setSavingProduct(false);
-    }
-  };
-
-  const updateStock = async (product, delta) => {
-    const nextStock = Math.max(0, Number(product.stock || 0) + delta);
-    try {
-      await updateDoc(doc(db, "products", product.id), {
-        stock: nextStock,
-      });
-    } catch (error) {
-      console.error("Stock update failed:", error);
     }
   };
 
@@ -445,10 +624,87 @@ export default function CrunzzoAdminDashboard() {
     }
   };
 
-  const handleDeleteProduct = async (product) => {
-    const ok = window.confirm(`Delete ${product.name || "this product"} from inventory?`);
-    if (!ok) return;
+  const startProductEdit = (product) => {
+    const packOptions = normalizeCrunzzoPackOptions(product);
+    const packForm = packOptions.reduce((acc, pack) => {
+      acc[`${pack.id}Rate`] = String(pack.rate || "");
+      acc[`${pack.id}PricingGroup`] = pack.pricingGroup || product.pricingGroup || "Standard Retail";
+      acc[`${pack.id}Stock`] = String(pack.stock || 0);
+      acc[`${pack.id}Gst`] = String(pack.gst || 18);
+      acc[`${pack.id}LowStockThreshold`] = String(pack.lowStockThreshold || 0);
+      return acc;
+    }, {});
 
+    setEditingProductId(product.id);
+    setEditingProductForm({
+      name: product.name || "",
+      ...packForm,
+    });
+  };
+
+  const cancelProductEdit = () => {
+    setEditingProductId(null);
+    setEditingProductForm({});
+  };
+
+  const handleProductEditInput = (event) => {
+    const { name, value } = event.target;
+    const isNumericPackField =
+      name.includes("Rate") ||
+      name.includes("Stock") ||
+      name.includes("Gst") ||
+      name.includes("LowStockThreshold");
+
+    setEditingProductForm((prev) => ({
+      ...prev,
+      [name]: isNumericPackField ? sanitizeNumber(value) : value,
+    }));
+  };
+
+  const handleSaveProductEdit = async (product) => {
+    const nextName = editingProductForm.name.trim();
+    const packOptions = buildCrunzzoPackOptionsFromForm(editingProductForm);
+    const invalidPack = packOptions.find((pack) => Number(pack.rate || 0) <= 0);
+
+    if (!nextName) {
+      alert("Please enter product name.");
+      return;
+    }
+
+    if (invalidPack) {
+      alert(`Please enter price for ${invalidPack.label}.`);
+      return;
+    }
+
+    try {
+      setSavingProductEdit(true);
+      const totalStockUnits = getCrunzzoTotalUnits(packOptions);
+      const primaryPack = packOptions[0];
+
+      await updateDoc(doc(db, "products", product.id), {
+        name: nextName,
+        rate: primaryPack.rate,
+        price: primaryPack.rate,
+        pricingGroup: primaryPack.pricingGroup,
+        gst: primaryPack.gst,
+        unitLabel: "Packs",
+        stock: totalStockUnits,
+        lowStockThreshold: Math.min(...packOptions.map((pack) => Number(pack.lowStockThreshold || 0))),
+        packSellingMode: "fixed-packs",
+        packOptions,
+        updatedAtMs: Date.now(),
+      });
+      cancelProductEdit();
+    } catch (error) {
+      console.error("Product edit failed:", error);
+      alert("Failed to update product.");
+    } finally {
+      setSavingProductEdit(false);
+    }
+  };
+
+  const handleDeleteProduct = async (product) => {
+    if (!window.confirm(`Are you sure you want to delete ${product.name}?`)) return;
     try {
       await deleteDoc(doc(db, "products", product.id));
     } catch (error) {
@@ -511,6 +767,7 @@ export default function CrunzzoAdminDashboard() {
 
   return (
     <div
+      className="admin-page-wrapper"
       style={{
         minHeight: "100vh",
         background: pageBackground,
@@ -519,7 +776,21 @@ export default function CrunzzoAdminDashboard() {
         padding: 14,
       }}
     >
+      <style>{`
+        @media (max-width: 480px) {
+          .admin-page-wrapper {
+            padding: 0 !important;
+          }
+          .admin-shell-wrapper {
+            max-width: none !important;
+            min-height: 100vh !important;
+            border: none !important;
+            box-shadow: none !important;
+          }
+        }
+      `}</style>
       <div
+        className="admin-shell-wrapper"
         style={{
           width: "100%",
           maxWidth: 430,
@@ -539,6 +810,7 @@ export default function CrunzzoAdminDashboard() {
           style={{
             flex: 1,
             overflowY: "auto",
+            overflowX: "hidden",
             padding: 14,
             background: contentBackground,
           }}
@@ -551,33 +823,18 @@ export default function CrunzzoAdminDashboard() {
               marginBottom: 16,
             }}
           >
-            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-              <div
-                style={{
-                  width: 32,
-                  height: 32,
-                  borderRadius: 10,
-                  display: "grid",
-                  placeItems: "center",
-                  background: "#ffffff",
-                  color: BRAND,
-                  fontWeight: 800,
-                  cursor: "pointer",
-                }}
-              >
-                ≡
-              </div>
+            <div style={{ display: "flex", alignItems: "center", minWidth: 0 }}>
               <img
                 src={crunzzoLogo}
                 alt="Crunzzo"
-                style={{ height: 26, objectFit: "contain" }}
+                style={{ height: 44, maxWidth: 142, objectFit: "contain", objectPosition: "left center" }}
               />
             </div>
 
             <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
               <button
                 type="button"
-                onClick={handleLogout}
+                onClick={() => setShowLogoutConfirm(true)}
                 style={{
                   border: "none",
                   background: "#fff",
@@ -594,23 +851,63 @@ export default function CrunzzoAdminDashboard() {
               >
                 Logout
               </button>
-              <div
+              <button
+                type="button"
+                onClick={() => goToTab("profile")}
+                aria-label="Edit admin profile"
                 style={{
-                  width: 32,
-                  height: 32,
+                  width: 48,
+                  height: 48,
+                  border: `2px solid ${activeTab === "profile" ? BRAND : "transparent"}`,
                   borderRadius: "50%",
                   background: "#f2f4f7",
                   display: "grid",
                   placeItems: "center",
-                  fontSize: 12,
+                  fontSize: 16,
                   color: TEXT,
-                  fontWeight: 800,
+                  fontWeight: 900,
+                  cursor: "pointer",
+                  padding: 0,
+                  overflow: "hidden",
                 }}
               >
-                {(userProfile.name || "A").charAt(0).toUpperCase()}
-              </div>
+                {userProfile.profileImageUrl ? (
+                  <img
+                    src={userProfile.profileImageUrl}
+                    alt={userProfile.name || "Admin profile"}
+                    style={{ width: "100%", height: "100%", objectFit: "cover" }}
+                  />
+                ) : (
+                  (userProfile.name || "A").charAt(0).toUpperCase()
+                )}
+              </button>
             </div>
           </div>
+
+          {activeTab === "profile" && (
+            <AdminProfileEditor
+              userProfile={userProfile}
+              setUserProfile={setUserProfile}
+              db={db}
+              storage={storage}
+              brand={BRAND}
+              text={TEXT}
+              muted={MUTED}
+              border={BORDER}
+              card={CARD}
+              logo={crunzzoLogo}
+              logoAlt="Crunzzo"
+              onBack={() => goToTab("dashboard")}
+              onNavigate={goToTab}
+              onLogout={handleLogout}
+              stats={{
+                totalSales: formatCompact(totalSalesValue),
+                orderCount: orders.length,
+                inventoryValue: formatCompact(inventoryValue),
+                lowStockCount,
+              }}
+            />
+          )}
 
           {activeTab === "dashboard" && (
             <>
@@ -638,7 +935,7 @@ export default function CrunzzoAdminDashboard() {
                 />
                 <StatCard
                   title="Revenue Units"
-                  value={products.reduce((s, p) => s + Number(p.stock || 0), 0)}
+                  value={products.reduce((s, p) => s + getCrunzzoTotalUnits(p), 0)}
                   subtitle="Current stock count"
                 />
               </div>
@@ -664,10 +961,10 @@ export default function CrunzzoAdminDashboard() {
                       placeItems: "center",
                     }}
                   >
-                    {products[0]?.imageUrl ? (
+                    {(topSkuProduct?.imageUrl || topSku.imageUrl) ? (
                       <img
-                        src={products[0].imageUrl}
-                        alt={products[0].name}
+                        src={topSkuProduct?.imageUrl || topSku.imageUrl}
+                        alt={topSku.name}
                         style={{ maxHeight: 120, objectFit: "contain" }}
                       />
                     ) : (
@@ -720,14 +1017,14 @@ export default function CrunzzoAdminDashboard() {
                   }}
                 >
                   <div>
-                    <div style={{ fontSize: 16, fontWeight: 800, color: TEXT }}>Sales by Zone</div>
-                    <div style={{ fontSize: 12, color: MUTED }}>Monthly distribution</div>
+                    <div style={{ fontSize: 16, fontWeight: 800, color: TEXT }}>Sales by Pincode</div>
+                    <div style={{ fontSize: 12, color: MUTED }}>Monthly pincode distribution</div>
                   </div>
                   <div style={{ fontSize: 13, fontWeight: 700, color: BRAND }}>Maps ⌃</div>
                 </div>
 
                 <div style={{ display: "grid", gap: 12 }}>
-                  {(zoneStats.length ? zoneStats : ZONES.map((z) => ({ name: z, value: 0, percent: 10 }))).map((item) => (
+                  {(pincodeStats.length ? pincodeStats : [{ name: "No pincode sales yet", value: 0, percent: 10 }]).map((item) => (
                     <div key={item.name}>
                       <div
                         style={{
@@ -808,10 +1105,10 @@ export default function CrunzzoAdminDashboard() {
 
                       <div style={{ textAlign: "right" }}>
                         <div style={{ fontSize: 13, fontWeight: 800, color: TEXT }}>
-                          {Number(item.stock || 0)} Units
+                          {getCrunzzoTotalUnits(item)} Units
                         </div>
                         <div style={{ fontSize: 11, color: BRAND }}>
-                          {formatCompact(Number(item.stock || 0) * Number(item.rate || 0))} Total
+                          {formatCompact(getCrunzzoInventoryValue(item))} Total
                         </div>
                       </div>
                     </div>
@@ -829,6 +1126,36 @@ export default function CrunzzoAdminDashboard() {
                   View every recorded distributor sale.
                 </p>
               </div>
+
+              <SectionCard>
+                <div style={{ padding: "4px 0" }}>
+                  <div style={{ fontSize: 11, color: MUTED, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.05em" }}>
+                    {getFilterLabel(historyFilter, startDate, endDate)}
+                  </div>
+                  <div style={{ marginTop: 8, fontSize: 28, fontWeight: 900, color: BRAND }}>
+                    {formatRupees(salesTotal)}
+                  </div>
+                  <div style={{ marginTop: 6, fontSize: 12, color: TEXT, fontWeight: 700 }}>
+                    {filteredSales.length} {filteredSales.length === 1 ? "Transaction" : "Transactions"}
+                  </div>
+                </div>
+              </SectionCard>
+
+              <div style={{ height: 12 }} />
+
+              <div style={{ margin: "0 -16px" }}>
+                <HistoryDateFilter
+                  historyFilter={historyFilter}
+                  setHistoryFilter={setHistoryFilter}
+                  startDate={startDate}
+                  setStartDate={setStartDate}
+                  endDate={endDate}
+                  setEndDate={setEndDate}
+                  accentColor={BRAND}
+                />
+              </div>
+
+              <div style={{ height: 12 }} />
 
               <SectionCard>
                 <input
@@ -849,6 +1176,12 @@ export default function CrunzzoAdminDashboard() {
 
               <div style={{ height: 14 }} />
 
+              <div style={{ fontSize: 11, fontWeight: 800, color: MUTED, letterSpacing: "0.05em", marginBottom: 10, paddingLeft: 4 }}>
+                {getFilterHeading(historyFilter, startDate, endDate)}
+              </div>
+
+              <div style={{ height: 14 }} />
+
               <div style={{ display: "grid", gap: 12 }}>
                 {filteredSales.length ? (
                   filteredSales.map((order) => (
@@ -866,7 +1199,7 @@ export default function CrunzzoAdminDashboard() {
                             {order.shopName || "Unnamed Shop"}
                           </div>
                           <div style={{ fontSize: 12, color: MUTED, marginTop: 4 }}>
-                            {order.distributorName || "Distributor"} • {order.salesZone || "No zone"}
+                            {order.distributorName || "Distributor"} • {order.salesPincode || order.pincode || "No pincode"}
                           </div>
                           <div style={{ fontSize: 11, color: MUTED, marginTop: 4 }}>
                             {formatTime(order.createdAtMs)}
@@ -909,12 +1242,10 @@ export default function CrunzzoAdminDashboard() {
               <div style={{ background: "#fff", padding: 0 }}>
                 <div
                   style={{
-                    fontSize: 10,
-                    color: MUTED,
-                    fontWeight: 700,
+                    ...PRODUCT_LABEL_STYLE,
                     textAlign: "center",
                     marginBottom: 10,
-                    letterSpacing: "0.08em",
+                    letterSpacing: "0.04em",
                   }}
                 >
                   ADD PRODUCT PHOTO
@@ -984,7 +1315,7 @@ export default function CrunzzoAdminDashboard() {
 
                 <div style={{ display: "grid", gap: 12, marginTop: 16 }}>
                   <label style={{ display: "grid", gap: 6 }}>
-                    <span style={{ fontSize: 10, fontWeight: 700, color: MUTED }}>
+                    <span style={PRODUCT_LABEL_STYLE}>
                       PRODUCT NAME
                     </span>
                     <input
@@ -993,7 +1324,8 @@ export default function CrunzzoAdminDashboard() {
                       onChange={handleProductInput}
                       placeholder="e.g. Crunzzo Cream & Onion Chips"
                       style={{
-                        height: 44,
+                        ...PRODUCT_FIELD_TEXT_STYLE,
+                        height: 48,
                         borderRadius: 12,
                         border: `1px solid ${BORDER}`,
                         padding: "0 14px",
@@ -1003,73 +1335,136 @@ export default function CrunzzoAdminDashboard() {
                     />
                   </label>
 
-                  <label style={{ display: "grid", gap: 6 }}>
-                    <span style={{ fontSize: 10, fontWeight: 700, color: MUTED }}>
-                      RATE (₹)
-                    </span>
-                    <input
-                      name="rate"
-                      value={productForm.rate}
-                      onChange={handleProductInput}
-                      placeholder="0.00"
-                      style={{
-                        height: 44,
-                        borderRadius: 12,
-                        border: `1px solid ${BORDER}`,
-                        padding: "0 14px",
-                        outline: "none",
-                        background: "#fff",
-                      }}
-                    />
-                  </label>
+                  <div style={{ display: "grid", gap: 10 }}>
+                    <span style={PRODUCT_LABEL_STYLE}>PACK PRICING & STOCK</span>
+                    {CRUNZZO_PACKS.map((pack) => (
+                      <div
+                        key={pack.id}
+                        style={{
+                          border: `1px solid ${BORDER}`,
+                          borderRadius: 14,
+                          padding: 12,
+                          background: "#fff",
+                          display: "grid",
+                          gap: 10,
+                        }}
+                      >
+                        <div style={{ fontSize: 14, fontWeight: 900, color: TEXT }}>
+                          {pack.label}
+                        </div>
+                        <label style={{ display: "grid", gap: 6 }}>
+                          <span style={PRODUCT_LABEL_STYLE}>PRICING GROUP</span>
+                          <select
+                            name={`${pack.id}PricingGroup`}
+                            value={productForm[`${pack.id}PricingGroup`]}
+                            onChange={handleProductInput}
+                            style={{
+                              ...PRODUCT_FIELD_TEXT_STYLE,
+                              height: 44,
+                              borderRadius: 12,
+                              border: `1px solid ${BORDER}`,
+                              padding: "0 12px",
+                              outline: "none",
+                              background: "#fff",
+                            }}
+                          >
+                            {PRICING_GROUPS.map((item) => (
+                              <option key={item} value={item}>
+                                {item}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                        <div
+                          style={{
+                            display: "grid",
+                            gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)",
+                            gap: 10,
+                          }}
+                        >
+                          <label style={{ display: "grid", gap: 6 }}>
+                            <span style={PRODUCT_LABEL_STYLE}>PRICE (₹)</span>
+                            <input
+                              name={`${pack.id}Rate`}
+                              value={productForm[`${pack.id}Rate`]}
+                              onChange={handleProductInput}
+                              placeholder="0"
+                              inputMode="numeric"
+                              style={{
+                                ...PRODUCT_FIELD_TEXT_STYLE,
+                                height: 44,
+                                borderRadius: 12,
+                                border: `1px solid ${BORDER}`,
+                                padding: "0 12px",
+                                outline: "none",
+                                background: "#fff",
+                              }}
+                            />
+                          </label>
+                          <label style={{ display: "grid", gap: 6 }}>
+                            <span style={PRODUCT_LABEL_STYLE}>QUANTITY</span>
+                            <input
+                              name={`${pack.id}Stock`}
+                              value={productForm[`${pack.id}Stock`]}
+                              onChange={handleProductInput}
+                              placeholder="0"
+                              inputMode="numeric"
+                              style={{
+                                ...PRODUCT_FIELD_TEXT_STYLE,
+                                height: 44,
+                                borderRadius: 12,
+                                border: `1px solid ${BORDER}`,
+                                padding: "0 12px",
+                                outline: "none",
+                                background: "#fff",
+                              }}
+                            />
+                          </label>
+                          <label style={{ display: "grid", gap: 6 }}>
+                            <span style={PRODUCT_LABEL_STYLE}>GST (%)</span>
+                            <input
+                              name={`${pack.id}Gst`}
+                              value={productForm[`${pack.id}Gst`]}
+                              onChange={handleProductInput}
+                              placeholder="18"
+                              inputMode="numeric"
+                              style={{
+                                ...PRODUCT_FIELD_TEXT_STYLE,
+                                height: 44,
+                                borderRadius: 12,
+                                border: `1px solid ${BORDER}`,
+                                padding: "0 12px",
+                                outline: "none",
+                                background: "#fff",
+                              }}
+                            />
+                          </label>
+                          <label style={{ display: "grid", gap: 6 }}>
+                            <span style={PRODUCT_LABEL_STYLE}>LOW STOCK</span>
+                            <input
+                              name={`${pack.id}LowStockThreshold`}
+                              value={productForm[`${pack.id}LowStockThreshold`]}
+                              onChange={handleProductInput}
+                              placeholder={String(pack.defaultLowStockThreshold)}
+                              inputMode="numeric"
+                              style={{
+                                ...PRODUCT_FIELD_TEXT_STYLE,
+                                height: 44,
+                                borderRadius: 12,
+                                border: `1px solid ${BORDER}`,
+                                padding: "0 12px",
+                                outline: "none",
+                                background: "#fff",
+                              }}
+                            />
+                          </label>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
 
                   <label style={{ display: "grid", gap: 6 }}>
-                    <span style={{ fontSize: 10, fontWeight: 700, color: MUTED }}>
-                      PRICING GROUP
-                    </span>
-                    <select
-                      name="pricingGroup"
-                      value={productForm.pricingGroup}
-                      onChange={handleProductInput}
-                      style={{
-                        height: 44,
-                        borderRadius: 12,
-                        border: `1px solid ${BORDER}`,
-                        padding: "0 14px",
-                        outline: "none",
-                        background: "#fff",
-                      }}
-                    >
-                      {PRICING_GROUPS.map((item) => (
-                        <option key={item} value={item}>
-                          {item}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-
-                  <label style={{ display: "grid", gap: 6 }}>
-                    <span style={{ fontSize: 10, fontWeight: 700, color: MUTED }}>
-                      GST (%)
-                    </span>
-                    <input
-                      name="gst"
-                      value={productForm.gst}
-                      onChange={handleProductInput}
-                      placeholder="18"
-                      style={{
-                        height: 44,
-                        borderRadius: 12,
-                        border: `1px solid ${BORDER}`,
-                        padding: "0 14px",
-                        outline: "none",
-                        background: "#fff",
-                      }}
-                    />
-                  </label>
-
-                  <label style={{ display: "grid", gap: 6 }}>
-                    <span style={{ fontSize: 10, fontWeight: 700, color: MUTED }}>
+                    <span style={PRODUCT_LABEL_STYLE}>
                       PRODUCT DESCRIPTION
                     </span>
                     <textarea
@@ -1079,6 +1474,8 @@ export default function CrunzzoAdminDashboard() {
                       placeholder="Enter detailed product specifications..."
                       rows={4}
                       style={{
+                        ...PRODUCT_FIELD_TEXT_STYLE,
+                        minHeight: 108,
                         borderRadius: 12,
                         border: `1px solid ${BORDER}`,
                         padding: 14,
@@ -1091,15 +1488,16 @@ export default function CrunzzoAdminDashboard() {
                   </label>
 
                   <label style={{ display: "grid", gap: 6 }}>
-                    <span style={{ fontSize: 10, fontWeight: 700, color: MUTED }}>
+                    <span style={PRODUCT_LABEL_STYLE}>
                       CATEGORY
                     </span>
                     <select
                       name="category"
                       value={productForm.category}
-                      onChange={handleProductInput}
+                      onChange={handleProductCategoryChange}
                       style={{
-                        height: 44,
+                        ...PRODUCT_FIELD_TEXT_STYLE,
+                        height: 48,
                         borderRadius: 12,
                         border: `1px solid ${BORDER}`,
                         padding: "0 14px",
@@ -1107,16 +1505,17 @@ export default function CrunzzoAdminDashboard() {
                         background: "#fff",
                       }}
                     >
-                      {CATEGORY_OPTIONS.map((item) => (
+                      {categoryOptions.map((item) => (
                         <option key={item} value={item}>
                           {item}
                         </option>
                       ))}
+                      <option value={ADD_CATEGORY_VALUE}>+ Add new category</option>
                     </select>
                   </label>
 
                   <div style={{ display: "grid", gap: 6 }}>
-                    <span style={{ fontSize: 10, fontWeight: 700, color: MUTED }}>
+                    <span style={PRODUCT_LABEL_STYLE}>
                       DISTRIBUTION PER ZONE
                     </span>
 
@@ -1140,9 +1539,11 @@ export default function CrunzzoAdminDashboard() {
                         }}
                         placeholder="Type your own zone"
                         style={{
-                          flex: "1 1 auto",
+                          ...PRODUCT_FIELD_TEXT_STYLE,
+                          flex: "1 1 0",
+                          width: "auto",
                           minWidth: 0,
-                          height: 44,
+                          height: 48,
                           borderRadius: 12,
                           border: `1px solid ${BORDER}`,
                           padding: "0 14px",
@@ -1158,12 +1559,13 @@ export default function CrunzzoAdminDashboard() {
                         style={{
                           flex: "0 0 76px",
                           width: 76,
-                          height: 44,
+                          height: 48,
                           border: "none",
                           borderRadius: 12,
                           background: BRAND,
                           color: "#fff",
-                          fontWeight: 700,
+                          fontSize: 14,
+                          fontWeight: 800,
                           cursor: "pointer",
                           boxSizing: "border-box",
                         }}
@@ -1255,7 +1657,7 @@ export default function CrunzzoAdminDashboard() {
                   </div>
 
                   <label style={{ display: "grid", gap: 6 }}>
-                    <span style={{ fontSize: 10, fontWeight: 700, color: MUTED }}>
+                    <span style={PRODUCT_LABEL_STYLE}>
                       PRODUCT SKU
                     </span>
                     <input
@@ -1264,7 +1666,8 @@ export default function CrunzzoAdminDashboard() {
                       onChange={handleProductInput}
                       placeholder="e.g. CRZ-001"
                       style={{
-                        height: 44,
+                        ...PRODUCT_FIELD_TEXT_STYLE,
+                        height: 48,
                         borderRadius: 12,
                         border: `1px solid ${BORDER}`,
                         padding: "0 14px",
@@ -1274,53 +1677,6 @@ export default function CrunzzoAdminDashboard() {
                     />
                   </label>
 
-                  <div
-                    style={{
-                      display: "grid",
-                      gridTemplateColumns: "1fr 1fr",
-                      gap: 12,
-                    }}
-                  >
-                    <label style={{ display: "grid", gap: 6 }}>
-                      <span style={{ fontSize: 10, fontWeight: 700, color: MUTED }}>
-                        OPENING STOCK
-                      </span>
-                      <input
-                        name="stock"
-                        value={productForm.stock}
-                        onChange={handleProductInput}
-                        placeholder="Enter quantity"
-                        style={{
-                          height: 44,
-                          borderRadius: 12,
-                          border: `1px solid ${BORDER}`,
-                          padding: "0 14px",
-                          outline: "none",
-                          background: "#fff",
-                        }}
-                      />
-                    </label>
-
-                    <label style={{ display: "grid", gap: 6 }}>
-                      <span style={{ fontSize: 10, fontWeight: 700, color: MUTED }}>
-                        LOW STOCK ALERT
-                      </span>
-                      <input
-                        name="lowStockThreshold"
-                        value={productForm.lowStockThreshold}
-                        onChange={handleProductInput}
-                        placeholder="20"
-                        style={{
-                          height: 44,
-                          borderRadius: 12,
-                          border: `1px solid ${BORDER}`,
-                          padding: "0 14px",
-                          outline: "none",
-                          background: "#fff",
-                        }}
-                      />
-                    </label>
-                  </div>
                 </div>
 
                 {productMessage ? (
@@ -1395,30 +1751,76 @@ export default function CrunzzoAdminDashboard() {
                 </p>
               </div>
 
-              <div style={{ display: "grid", gap: 10, marginBottom: 14 }}>
-                <SectionCard>
-                  <div style={{ fontSize: 10, color: MUTED, fontWeight: 700 }}>
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(3, 1fr)",
+                  gap: 8,
+                  marginBottom: 14,
+                }}
+              >
+                <SectionCard style={{ padding: "12px 4px", textAlign: "center" }}>
+                  <div
+                    style={{
+                      fontSize: 11,
+                      color: TEXT,
+                      fontWeight: 900,
+                      lineHeight: 1.2,
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      height: 28,
+                      textAlign: "center",
+                    }}
+                    title="TOTAL PRODUCTS"
+                  >
                     TOTAL PRODUCTS
                   </div>
-                  <div style={{ marginTop: 8, fontSize: 30, fontWeight: 800, color: BRAND }}>
+                  <div style={{ marginTop: 6, fontSize: 20, fontWeight: 900, color: BRAND }}>
                     {products.length}
                   </div>
                 </SectionCard>
 
-                <SectionCard>
-                  <div style={{ fontSize: 10, color: MUTED, fontWeight: 700 }}>
+                <SectionCard style={{ padding: "12px 4px", textAlign: "center" }}>
+                  <div
+                    style={{
+                      fontSize: 11,
+                      color: TEXT,
+                      fontWeight: 900,
+                      lineHeight: 1.2,
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      height: 28,
+                      textAlign: "center",
+                    }}
+                    title="LOW STOCK ALERTS"
+                  >
                     LOW STOCK ALERTS
                   </div>
-                  <div style={{ marginTop: 8, fontSize: 30, fontWeight: 800, color: BRAND }}>
+                  <div style={{ marginTop: 6, fontSize: 20, fontWeight: 900, color: BRAND }}>
                     {lowStockCount}
                   </div>
                 </SectionCard>
 
-                <SectionCard>
-                  <div style={{ fontSize: 10, color: MUTED, fontWeight: 700 }}>
+                <SectionCard style={{ padding: "12px 4px", textAlign: "center" }}>
+                  <div
+                    style={{
+                      fontSize: 11,
+                      color: TEXT,
+                      fontWeight: 900,
+                      lineHeight: 1.2,
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      height: 28,
+                      textAlign: "center",
+                    }}
+                    title="INVENTORY VALUE"
+                  >
                     INVENTORY VALUE
                   </div>
-                  <div style={{ marginTop: 8, fontSize: 30, fontWeight: 800, color: TEXT }}>
+                  <div style={{ marginTop: 6, fontSize: 20, fontWeight: 900, color: TEXT }}>
                     {formatCompact(inventoryValue)}
                   </div>
                 </SectionCard>
@@ -1446,45 +1848,62 @@ export default function CrunzzoAdminDashboard() {
               <div style={{ display: "grid", gap: 12 }}>
                 {filteredInventory.length ? (
                   filteredInventory.map((item) => {
-                    const lowStock = Number(item.stock || 0) <= Number(item.lowStockThreshold || 20);
+                    const packOptions = normalizeCrunzzoPackOptions(item);
+                    const totalUnits = getCrunzzoTotalUnits(packOptions);
+                    const lowStock = isCrunzzoLowStock(item);
+                    const isEditing = editingProductId === item.id;
 
                     return (
                       <SectionCard key={item.id}>
                         <div
                           style={{
                             display: "grid",
-                            gridTemplateColumns: "56px 1fr auto",
+                            gridTemplateColumns: "64px minmax(0, 1fr) auto",
                             gap: 12,
                             alignItems: "center",
                           }}
                         >
                           <div
                             style={{
-                              width: 56,
-                              height: 56,
+                              width: 64,
+                              height: 80,
                               borderRadius: 14,
                               overflow: "hidden",
-                              background: "#f6f6f6",
-                              display: "grid",
-                              placeItems: "center",
+                              background: "#f9f9f9",
+                              display: "flex",
+                              alignItems: "center",
+                              justifyContent: "center",
+                              border: `1px solid ${BORDER}`,
                             }}
                           >
                             {item.imageUrl ? (
                               <img
                                 src={item.imageUrl}
                                 alt={item.name}
-                                style={{ width: "100%", height: "100%", objectFit: "cover" }}
+                                style={{
+                                  maxWidth: "100%",
+                                  maxHeight: "100%",
+                                  objectFit: "contain",
+                                  padding: 4,
+                                  boxSizing: "border-box"
+                                }}
                               />
                             ) : (
                               <img
                                 src={crunzzoLogo}
                                 alt="Crunzzo"
-                                style={{ width: 40, objectFit: "contain" }}
+                                style={{
+                                  maxWidth: "100%",
+                                  maxHeight: "100%",
+                                  objectFit: "contain",
+                                  padding: 10,
+                                  boxSizing: "border-box"
+                                }}
                               />
                             )}
                           </div>
 
-                          <div>
+                          <div style={{ minWidth: 0 }}>
                             <div style={{ fontSize: 14, fontWeight: 800, color: TEXT }}>
                               {item.name}
                             </div>
@@ -1499,17 +1918,193 @@ export default function CrunzzoAdminDashboard() {
                                 fontWeight: 700,
                               }}
                             >
-                              {item.stock} {item.unitLabel || "Units"} {lowStock ? "• LOW STOCK" : ""}
+                              {totalUnits} units total {lowStock ? "• LOW STOCK" : ""}
                             </div>
                           </div>
 
                           <div style={{ textAlign: "right" }}>
                             <div style={{ fontSize: 14, fontWeight: 800, color: TEXT }}>
-                              {formatRupees(item.rate)}
+                              {formatCompact(getCrunzzoInventoryValue(item))}
                             </div>
-                            <div style={{ fontSize: 11, color: MUTED, marginTop: 4 }}>per unit</div>
+                            <div style={{ fontSize: 11, color: MUTED, marginTop: 4 }}>stock value</div>
                           </div>
                         </div>
+
+                        <div style={{ display: "grid", gap: 8, marginTop: 12 }}>
+                          {packOptions.map((pack) => (
+                            <div
+                              key={pack.id}
+                              style={{
+                                display: "grid",
+                                gridTemplateColumns: "minmax(0, 1fr) auto",
+                                gap: 10,
+                                alignItems: "center",
+                                border: `1px solid ${BORDER}`,
+                                borderRadius: 12,
+                                padding: "9px 10px",
+                                background: "#fff",
+                              }}
+                            >
+                              <div style={{ minWidth: 0 }}>
+                                <div style={{ fontSize: 12, fontWeight: 900, color: TEXT }}>
+                                  {pack.label}
+                                </div>
+                                <div style={{ fontSize: 11, color: MUTED, marginTop: 3 }}>
+                                  {pack.pricingGroup} • {pack.stock} packs • {pack.stock * pack.packSize} units • GST {pack.gst}%
+                                </div>
+                              </div>
+                              <div style={{ fontSize: 12, fontWeight: 900, color: BRAND }}>
+                                {formatRupees(pack.rate)}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+
+                        {isEditing ? (
+                          <div
+                            style={{
+                              marginTop: 14,
+                              padding: 12,
+                              border: `1px solid ${BORDER}`,
+                              borderRadius: 14,
+                              background: "#fafafa",
+                              display: "grid",
+                              gap: 12,
+                            }}
+                          >
+                            <label style={{ display: "grid", gap: 6, color: TEXT, fontSize: 12, fontWeight: 900 }}>
+                              Product Name
+                              <input
+                                name="name"
+                                value={editingProductForm.name || ""}
+                                onChange={handleProductEditInput}
+                                placeholder="Product name"
+                                style={{
+                                  height: 42,
+                                  borderRadius: 12,
+                                  border: `1px solid ${BORDER}`,
+                                  padding: "0 12px",
+                                  outline: "none",
+                                  background: "#fff",
+                                  color: TEXT,
+                                  fontWeight: 700,
+                                }}
+                              />
+                            </label>
+
+                            {CRUNZZO_PACKS.map((pack) => (
+                              <div
+                                key={pack.id}
+                                style={{
+                                  border: `1px solid ${BORDER}`,
+                                  borderRadius: 12,
+                                  padding: 10,
+                                  background: "#fff",
+                                  display: "grid",
+                                  gap: 10,
+                                }}
+                              >
+                                <div style={{ fontSize: 12, fontWeight: 900, color: TEXT }}>
+                                  {pack.label}
+                                </div>
+                                <label style={{ display: "grid", gap: 5, fontSize: 11, fontWeight: 800, color: TEXT }}>
+                                  Pricing Group
+                                  <select
+                                    name={`${pack.id}PricingGroup`}
+                                    value={editingProductForm[`${pack.id}PricingGroup`] || "Standard Retail"}
+                                    onChange={handleProductEditInput}
+                                    style={{
+                                      height: 38,
+                                      borderRadius: 10,
+                                      border: `1px solid ${BORDER}`,
+                                      padding: "0 10px",
+                                      outline: "none",
+                                      background: "#fff",
+                                      fontWeight: 700,
+                                    }}
+                                  >
+                                    {PRICING_GROUPS.map((item) => (
+                                      <option key={item} value={item}>
+                                        {item}
+                                      </option>
+                                    ))}
+                                  </select>
+                                </label>
+                                <div
+                                  style={{
+                                    display: "grid",
+                                    gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)",
+                                    gap: 8,
+                                  }}
+                                >
+                                  {[
+                                    ["Rate", "Price"],
+                                    ["Stock", "Qty"],
+                                    ["Gst", "GST %"],
+                                    ["LowStockThreshold", "Low"],
+                                  ].map(([suffix, label]) => (
+                                    <label key={suffix} style={{ display: "grid", gap: 5, fontSize: 11, fontWeight: 800, color: TEXT }}>
+                                      {label}
+                                      <input
+                                        name={`${pack.id}${suffix}`}
+                                        value={editingProductForm[`${pack.id}${suffix}`] || ""}
+                                        onChange={handleProductEditInput}
+                                        inputMode="numeric"
+                                        style={{
+                                          height: 38,
+                                          borderRadius: 10,
+                                          border: `1px solid ${BORDER}`,
+                                          padding: "0 10px",
+                                          outline: "none",
+                                          background: "#fff",
+                                          fontWeight: 700,
+                                        }}
+                                      />
+                                    </label>
+                                  ))}
+                                </div>
+                              </div>
+                            ))}
+
+                            <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, flexWrap: "wrap" }}>
+                              <button
+                                type="button"
+                                onClick={cancelProductEdit}
+                                disabled={savingProductEdit}
+                                style={{
+                                  height: 34,
+                                  padding: "0 12px",
+                                  borderRadius: 999,
+                                  border: `1px solid ${BORDER}`,
+                                  background: "#fff",
+                                  color: MUTED,
+                                  fontWeight: 800,
+                                  cursor: savingProductEdit ? "not-allowed" : "pointer",
+                                }}
+                              >
+                                Cancel
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleSaveProductEdit(item)}
+                                disabled={savingProductEdit}
+                                style={{
+                                  height: 34,
+                                  padding: "0 14px",
+                                  borderRadius: 999,
+                                  border: "none",
+                                  background: BRAND,
+                                  color: "#fff",
+                                  fontWeight: 900,
+                                  cursor: savingProductEdit ? "not-allowed" : "pointer",
+                                  opacity: savingProductEdit ? 0.7 : 1,
+                                }}
+                              >
+                                {savingProductEdit ? "Saving..." : "Save"}
+                              </button>
+                            </div>
+                          </div>
+                        ) : null}
 
                         <div
                           style={{
@@ -1523,59 +2118,29 @@ export default function CrunzzoAdminDashboard() {
                         >
                           <div
                             style={{
-                              display: "inline-grid",
-                              gridTemplateColumns: "36px 44px 36px",
-                              border: `1px solid ${BORDER}`,
-                              borderRadius: 999,
-                              overflow: "hidden",
-                              width: "fit-content",
-                            }}
-                          >
-                            <button
-                              type="button"
-                              onClick={() => updateStock(item, -1)}
-                              style={{
-                                border: "none",
-                                background: "#fff",
-                                cursor: "pointer",
-                                fontSize: 18,
-                              }}
-                            >
-                              −
-                            </button>
-                            <div
-                              style={{
-                                display: "grid",
-                                placeItems: "center",
-                                fontWeight: 800,
-                                color: TEXT,
-                                background: "#fff",
-                              }}
-                            >
-                              {item.stock || 0}
-                            </div>
-                            <button
-                              type="button"
-                              onClick={() => updateStock(item, 1)}
-                              style={{
-                                border: "none",
-                                background: "#fff",
-                                cursor: "pointer",
-                                fontSize: 18,
-                              }}
-                            >
-                              +
-                            </button>
-                          </div>
-
-                          <div
-                            style={{
                               display: "flex",
                               gap: 8,
                               flexWrap: "wrap",
                               justifyContent: "flex-end",
                             }}
                           >
+                            <button
+                              type="button"
+                              onClick={() => startProductEdit(item)}
+                              style={{
+                                height: 34,
+                                padding: "0 12px",
+                                borderRadius: 999,
+                                border: `1px solid ${isEditing ? BRAND : BORDER}`,
+                                background: isEditing ? "#fdeeee" : "#fff",
+                                color: isEditing ? BRAND : TEXT,
+                                fontWeight: 700,
+                                cursor: "pointer",
+                              }}
+                            >
+                              {isEditing ? "Editing" : "Edit"}
+                            </button>
+
                             <button
                               type="button"
                               onClick={() => toggleProductStatus(item)}
@@ -1631,42 +2196,67 @@ export default function CrunzzoAdminDashboard() {
             flexShrink: 0,
             background: "#fff",
             borderTop: `1px solid ${BORDER}`,
-            padding: 10,
+            padding: "8px 10px",
           }}
         >
           <div
             style={{
               display: "flex",
-              gap: 8,
+              gap: 4,
               background: "#fff",
               border: `1px solid ${BORDER}`,
-              borderRadius: 20,
-              padding: 10,
+              borderRadius: 16,
+              padding: 4,
             }}
           >
             <AdminTab
               label="Dashboard"
               active={activeTab === "dashboard"}
-              onClick={() => setActiveTab("dashboard")}
+              onClick={() => goToTab("dashboard")}
             />
             <AdminTab
               label="Sales"
               active={activeTab === "sales"}
-              onClick={() => setActiveTab("sales")}
+              onClick={() => goToTab("sales")}
             />
             <AdminTab
               label="Products"
               active={activeTab === "products"}
-              onClick={() => setActiveTab("products")}
+              onClick={() => goToTab("products")}
             />
             <AdminTab
               label="Inventory"
               active={activeTab === "inventory"}
-              onClick={() => setActiveTab("inventory")}
+              onClick={() => goToTab("inventory")}
             />
           </div>
         </div>
       </div>
+
+      <CategoryModal
+        open={categoryModalOpen}
+        value={newCategoryName}
+        error={newCategoryError}
+        onChange={(value) => {
+          setNewCategoryName(value);
+          setNewCategoryError("");
+        }}
+        onClose={closeCategoryModal}
+        onSubmit={submitNewCategory}
+      />
+
+      {showLogoutConfirm && (
+        <div className="crz-logout-overlay" onClick={() => setShowLogoutConfirm(false)}>
+          <div className="crz-logout-modal" onClick={(e) => e.stopPropagation()}>
+            <h3>Logout</h3>
+            <p>Are you sure you want to logout?</p>
+            <div className="crz-logout-actions">
+              <button className="crz-logout-cancel" onClick={() => setShowLogoutConfirm(false)}>Cancel</button>
+              <button className="crz-logout-confirm czd-logout-confirm" onClick={handleLogout}>Yes</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

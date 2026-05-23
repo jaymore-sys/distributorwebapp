@@ -16,6 +16,11 @@ import { getDownloadURL, ref, uploadBytes } from "firebase/storage";
 import crunzzoLogo from "../../assets/crunzzologo.png";
 import { getFirebaseServices } from "../../firebase";
 import HistoryDateFilter, { getFilterLabel, getFilterHeading } from "../../components/HistoryDateFilter";
+import { routeToChooseSelection, usePortalHistoryManager } from "../../navigation/globalNavigationManager";
+import {
+  getCrunzzoTotalUnits,
+  normalizeCrunzzoPackOptions,
+} from "../../utils/crunzzoPacks";
 import "./crunzzo.css";
 
 const { auth, db, storage } = getFirebaseServices("crunzzo");
@@ -39,6 +44,10 @@ function formatCompactRupees(value) {
 
 function sanitizePhoneInput(value) {
   return value.replace(/\D/g, "").slice(0, 10);
+}
+
+function sanitizePincodeInput(value) {
+  return value.replace(/\D/g, "").slice(0, 6);
 }
 
 function sanitizeGstInput(value) {
@@ -81,8 +90,8 @@ function buildInvoiceHtml(order) {
       return `
         <tr>
           <td>${index + 1}</td>
-          <td>${escapeHtml(item.name || "-")}</td>
-          <td>${qty}</td>
+          <td>${escapeHtml(`${item.name || "-"}${item.packLabel ? ` (${item.packLabel})` : ""}`)}</td>
+          <td>${qty}${item.totalUnits ? ` packs / ${item.totalUnits} units` : ""}</td>
           <td>${formatRupees(rate)}</td>
           <td>${formatRupees(total)}</td>
         </tr>
@@ -199,8 +208,8 @@ function buildInvoiceHtml(order) {
                 <div class="value">${escapeHtml(order?.gst || "-")}</div>
               </div>
               <div>
-                <div class="label">Sales Zone</div>
-                <div class="value">${escapeHtml(order?.salesZone || "-")}</div>
+                <div class="label">Sales Pincode</div>
+                <div class="value">${escapeHtml(order?.salesPincode || order?.pincode || order?.salesZone || "-")}</div>
               </div>
               <div>
                 <div class="label">Distributor</div>
@@ -530,6 +539,7 @@ export default function CrunzzoDistributorDashboard() {
   const fileInputRef = useRef(null);
 
   const [screen, setScreen] = useState("home");
+  const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
   const [userProfile, setUserProfile] = useState(null);
 
   const [loadingProfile, setLoadingProfile] = useState(true);
@@ -545,7 +555,7 @@ export default function CrunzzoDistributorDashboard() {
     shopName: "",
     phone: "",
     gst: "",
-    zone: "",
+    pincode: "",
   });
 
   const [customerError, setCustomerError] = useState("");
@@ -556,6 +566,7 @@ export default function CrunzzoDistributorDashboard() {
   const [endDate, setEndDate] = useState(null);
   const [category, setCategory] = useState("all");
   const [cart, setCart] = useState({});
+  const [selectedProductForPacks, setSelectedProductForPacks] = useState(null);
   const [pendingSummaryAfterCustomer, setPendingSummaryAfterCustomer] = useState(false);
 
   const [profileOpen, setProfileOpen] = useState(false);
@@ -570,6 +581,18 @@ export default function CrunzzoDistributorDashboard() {
     territory: "",
   });
 
+  const goToScreen = usePortalHistoryManager({
+    portalKey: "crunzzo-distributor",
+    basePath: "/crunzzo/distributor",
+    rootScreen: "home",
+    currentScreen: screen,
+    setScreen,
+  });
+
+  useEffect(() => {
+    setShowLogoutConfirm(false);
+  }, [screen]);
+
   useEffect(() => {
     let unsubscribeOrders = () => { };
 
@@ -579,6 +602,7 @@ export default function CrunzzoDistributorDashboard() {
         setOrders([]);
         setLoadingProfile(false);
         setLoadingOrders(false);
+        routeToChooseSelection(navigate);
         return;
       }
 
@@ -653,7 +677,7 @@ export default function CrunzzoDistributorDashboard() {
       unsubscribeOrders();
       unsubscribeProducts();
     };
-  }, []);
+  }, [navigate]);
 
   const categoryTabs = useMemo(() => {
     const names = [...new Set(products.map((item) => (item.category || "").trim()).filter(Boolean))];
@@ -673,27 +697,49 @@ export default function CrunzzoDistributorDashboard() {
     });
   }, [products, category, search]);
 
-  const selectedItems = useMemo(() => {
-    return products
-      .filter((item) => cart[item.id] > 0)
-      .map((item) => {
-        const rate = Number(item.rate || 0);
-        const quantity = cart[item.id];
+  const selectedProductForPacksLive = useMemo(() => {
+    if (!selectedProductForPacks) return null;
+    return (
+      products.find((product) => product.id === selectedProductForPacks.id) ||
+      selectedProductForPacks
+    );
+  }, [products, selectedProductForPacks]);
 
-        return {
-          ...item,
-          quantity,
-          lineTotal: quantity * rate,
-          rateLabel: `₹${rate.toFixed(2)} / Unit`,
-        };
-      });
+  const selectedItems = useMemo(() => {
+    return products.flatMap((product) => {
+      return normalizeCrunzzoPackOptions(product)
+        .filter((pack) => cart[`${product.id}_${pack.id}`] > 0)
+        .map((pack) => {
+          const quantity = cart[`${product.id}_${pack.id}`];
+          const rate = Number(pack.rate || 0);
+
+          return {
+            ...product,
+            id: `${product.id}_${pack.id}`,
+            productId: product.id,
+            packId: pack.id,
+            packLabel: pack.label,
+            packSize: pack.packSize,
+            quantity,
+            totalUnits: quantity * pack.packSize,
+            gst: Number(pack.gst || 0),
+            unitLabel: pack.label,
+            rate,
+            lineTotal: quantity * rate,
+            rateLabel: `${formatRupees(rate)} / ${pack.label}`,
+          };
+        });
+    });
   }, [products, cart]);
 
-  const totalUnits = selectedItems.reduce((sum, item) => sum + item.quantity, 0);
+  const totalUnits = selectedItems.reduce((sum, item) => sum + item.totalUnits, 0);
   const subtotal = selectedItems.reduce((sum, item) => sum + item.lineTotal, 0);
   const wholesaleDiscount = subtotal * 0.05;
   const taxableValue = subtotal - wholesaleDiscount;
-  const tax = taxableValue * 0.08;
+  const weightedGstRate = subtotal
+    ? selectedItems.reduce((sum, item) => sum + item.lineTotal * Number(item.gst || 0), 0) / subtotal
+    : 0;
+  const tax = taxableValue * (weightedGstRate / 100);
   const totalSaleValue = taxableValue + tax;
 
   const { todayRevenue, todayUnits } = useMemo(() => {
@@ -771,8 +817,8 @@ export default function CrunzzoDistributorDashboard() {
       return false;
     }
 
-    if (!customer.zone.trim()) {
-      setCustomerError("Please select sales zone.");
+    if (!/^\d{6}$/.test(customer.pincode.trim())) {
+      setCustomerError("Pincode must be exactly 6 digits.");
       return false;
     }
 
@@ -785,6 +831,7 @@ export default function CrunzzoDistributorDashboard() {
     let finalValue = value;
 
     if (name === "phone") finalValue = sanitizePhoneInput(value);
+    if (name === "pincode") finalValue = sanitizePincodeInput(value);
     if (name === "gst") finalValue = sanitizeGstInput(value);
 
     setCustomerError("");
@@ -863,6 +910,7 @@ export default function CrunzzoDistributorDashboard() {
         ...payload,
       }));
 
+      setProfilePreview(profileImageUrl);
       setProfileImageFile(null);
       setProfileOpen(false);
       setProfileMessage("Profile updated successfully.");
@@ -877,17 +925,22 @@ export default function CrunzzoDistributorDashboard() {
   const handleLogout = async () => {
     try {
       await signOut(auth);
-      navigate("/login?section=crunzzo", { replace: true });
+      setShowLogoutConfirm(false);
+      routeToChooseSelection(navigate);
     } catch (error) {
       console.error("Logout error:", error);
       setProfileMessage("Failed to logout.");
     }
   };
 
-  const addToCart = (productId) => {
+  const addToCart = (productId, packId) => {
     const product = products.find((p) => p.id === productId);
-    const availableStock = Number(product?.stock || 0);
-    const currentQty = cart[productId] || 0;
+    const pack = normalizeCrunzzoPackOptions(product).find((item) => item.id === packId);
+    if (!pack) return;
+
+    const cartKey = `${productId}_${packId}`;
+    const availableStock = Number(pack.stock || 0);
+    const currentQty = cart[cartKey] || 0;
 
     if (currentQty >= availableStock) {
       return;
@@ -895,19 +948,21 @@ export default function CrunzzoDistributorDashboard() {
 
     setCart((prev) => ({
       ...prev,
-      [productId]: currentQty + 1,
+      [cartKey]: currentQty + 1,
     }));
   };
 
-  const removeFromCart = (productId) => {
+  const removeFromCart = (productId, packId) => {
+    const cartKey = `${productId}_${packId}`;
+
     setCart((prev) => {
       const next = { ...prev };
-      const current = next[productId] || 0;
+      const current = next[cartKey] || 0;
 
       if (current <= 1) {
-        delete next[productId];
+        delete next[cartKey];
       } else {
-        next[productId] = current - 1;
+        next[cartKey] = current - 1;
       }
 
       return next;
@@ -919,19 +974,20 @@ export default function CrunzzoDistributorDashboard() {
       shopName: "",
       phone: "",
       gst: "",
-      zone: "",
+      pincode: "",
     });
     setCustomerError("");
     setCategory("all");
     setSearch("");
     setCart({});
+    setSelectedProductForPacks(null);
     setLastOrder(null);
     setPendingSummaryAfterCustomer(false);
   };
 
   const startNewSale = () => {
     resetSaleFlow();
-    setScreen("customer");
+    goToScreen("customer");
   };
 
   const moveToProducts = () => {
@@ -939,11 +995,11 @@ export default function CrunzzoDistributorDashboard() {
 
     if (pendingSummaryAfterCustomer) {
       setPendingSummaryAfterCustomer(false);
-      setScreen("summary");
+      goToScreen("summary");
       return;
     }
 
-    setScreen("products");
+    goToScreen("products");
   };
 
   const moveToSummary = () => {
@@ -951,11 +1007,11 @@ export default function CrunzzoDistributorDashboard() {
 
     if (!validateCustomerInputs()) {
       setPendingSummaryAfterCustomer(true);
-      setScreen("customer");
+      goToScreen("customer");
       return;
     }
 
-    setScreen("summary");
+    goToScreen("summary");
   };
 
   const buildCurrentInvoiceData = () => ({
@@ -966,7 +1022,8 @@ export default function CrunzzoDistributorDashboard() {
     shopName: customer.shopName,
     phone: customer.phone,
     gst: customer.gst,
-    salesZone: customer.zone,
+    salesPincode: customer.pincode,
+    pincode: customer.pincode,
     subtotal,
     wholesaleDiscount,
     tax,
@@ -974,12 +1031,17 @@ export default function CrunzzoDistributorDashboard() {
     totalUnits,
     itemCount: selectedItems.length,
     items: selectedItems.map((item) => ({
-      productId: item.id,
+      productId: item.productId,
+      packId: item.packId,
+      packLabel: item.packLabel,
+      packSize: item.packSize,
+      totalUnits: item.totalUnits,
       name: item.name || "",
       category: item.category || "",
       quantity: item.quantity,
       unitLabel: item.unitLabel || "",
       rate: Number(item.rate || 0),
+      gst: Number(item.gst || 0),
       lineTotal: item.lineTotal,
       imageUrl: item.imageUrl || "",
     })),
@@ -1000,7 +1062,7 @@ export default function CrunzzoDistributorDashboard() {
 
     if (!validateCustomerInputs()) {
       setPendingSummaryAfterCustomer(true);
-      setScreen("customer");
+      goToScreen("customer");
       return;
     }
 
@@ -1012,7 +1074,7 @@ export default function CrunzzoDistributorDashboard() {
 
     if (!validateCustomerInputs()) {
       setPendingSummaryAfterCustomer(true);
-      setScreen("customer");
+      goToScreen("customer");
       return;
     }
 
@@ -1031,7 +1093,8 @@ export default function CrunzzoDistributorDashboard() {
         shopName: customer.shopName,
         phone: customer.phone,
         gst: customer.gst,
-        salesZone: customer.zone,
+        salesPincode: customer.pincode,
+        pincode: customer.pincode,
         subtotal,
         wholesaleDiscount,
         tax,
@@ -1039,13 +1102,18 @@ export default function CrunzzoDistributorDashboard() {
         totalUnits,
         itemCount: selectedItems.length,
         items: selectedItems.map((item) => ({
-          productId: item.id,
+          productId: item.productId,
+          packId: item.packId,
+          packLabel: item.packLabel,
+          packSize: item.packSize,
+          totalUnits: item.totalUnits,
           name: item.name || "",
           category: item.category || "",
           quantity: item.quantity,
           unitLabel: item.unitLabel || "",
           rate: Number(item.rate || 0),
-          rateLabel: `₹${Number(item.rate || 0).toFixed(2)} / Unit`,
+          rateLabel: `${formatRupees(item.rate)} / ${item.packLabel}`,
+          gst: Number(item.gst || 0),
           lineTotal: item.lineTotal,
           imageUrl: item.imageUrl || "",
         })),
@@ -1071,12 +1139,21 @@ export default function CrunzzoDistributorDashboard() {
       // 2. Update Stock (best-effort - distributor may lack write access to products)
       try {
         for (const item of selectedItems) {
-          const productRef = doc(db, "products", item.id);
+          const productRef = doc(db, "products", item.productId);
           const productSnap = await getDoc(productRef);
           if (productSnap.exists()) {
-            const currentStock = Number(productSnap.data().stock || 0);
-            const nextStock = Math.max(0, currentStock - item.quantity);
-            await updateDoc(productRef, { stock: nextStock });
+            const packOptions = normalizeCrunzzoPackOptions(productSnap.data()).map((pack) => {
+              if (pack.id !== item.packId) return pack;
+              return {
+                ...pack,
+                stock: Math.max(0, Number(pack.stock || 0) - item.quantity),
+              };
+            });
+
+            await updateDoc(productRef, {
+              packOptions,
+              stock: getCrunzzoTotalUnits(packOptions),
+            });
           }
         }
       } catch (err) {
@@ -1088,7 +1165,7 @@ export default function CrunzzoDistributorDashboard() {
         ...orderPayload,
       });
 
-      setScreen("success");
+      goToScreen("success");
       setCart({});
       setPendingSummaryAfterCustomer(false);
     } catch (error) {
@@ -1139,7 +1216,7 @@ export default function CrunzzoDistributorDashboard() {
       <button
         type="button"
         className={active === "home" ? "active" : ""}
-        onClick={() => setScreen("home")}
+        onClick={() => goToScreen("home")}
       >
         <DashboardNavIcon type="home" active={active === "home"} />
         <span>Home</span>
@@ -1148,7 +1225,7 @@ export default function CrunzzoDistributorDashboard() {
       <button
         type="button"
         className={active === "products" ? "active" : ""}
-        onClick={() => setScreen("products")}
+        onClick={() => goToScreen("products")}
       >
         <DashboardNavIcon type="products" active={active === "products"} />
         <span>Inventory</span>
@@ -1157,7 +1234,7 @@ export default function CrunzzoDistributorDashboard() {
       <button
         type="button"
         className={active === "history" ? "active" : ""}
-        onClick={() => setScreen("history")}
+        onClick={() => goToScreen("history")}
       >
         <DashboardNavIcon type="history" active={active === "history"} />
         <span>Orders</span>
@@ -1166,7 +1243,7 @@ export default function CrunzzoDistributorDashboard() {
       <button
         type="button"
         className={active === "profile" ? "active" : ""}
-        onClick={() => setScreen("profile")}
+        onClick={() => goToScreen("profile")}
       >
         <DashboardNavIcon type="profile" active={active === "profile"} />
         <span>Profile</span>
@@ -1496,7 +1573,7 @@ export default function CrunzzoDistributorDashboard() {
                 type="button"
                 onClick={() => {
                   setHistoryFilter("month");
-                  setScreen("history");
+                  goToScreen("history");
                 }}
                 style={{
                   border: "none",
@@ -1559,14 +1636,14 @@ export default function CrunzzoDistributorDashboard() {
                   icon="🗃"
                   title="Inventory Access"
                   subtitle="View real-time stock levels"
-                  onClick={() => setScreen("products")}
+                  onClick={() => goToScreen("products")}
                   accent={BRAND_ACCENT}
                 />
                 <ProfileMenuRow
                   icon="🧾"
                   title="My Sales History"
                   subtitle="Track your closed deals"
-                  onClick={() => setScreen("history")}
+                  onClick={() => goToScreen("history")}
                   accent={BRAND_ACCENT}
                 />
               </div>
@@ -1587,7 +1664,7 @@ export default function CrunzzoDistributorDashboard() {
 
             <button
               type="button"
-              onClick={handleLogout}
+              onClick={() => setShowLogoutConfirm(true)}
               style={{
                 marginTop: 20,
                 width: "100%",
@@ -1607,9 +1684,22 @@ export default function CrunzzoDistributorDashboard() {
 
           <div style={{ flexShrink: 0, background: "#fff" }}>{renderMobileNav("profile")}</div>
         </div>
+
+        {showLogoutConfirm && (
+          <div className="crz-logout-overlay" onClick={() => setShowLogoutConfirm(false)}>
+            <div className="crz-logout-modal" onClick={(e) => e.stopPropagation()}>
+              <h3>Logout</h3>
+              <p>Are you sure you want to logout?</p>
+              <div className="crz-logout-actions">
+                <button className="crz-logout-cancel" onClick={() => setShowLogoutConfirm(false)}>Cancel</button>
+                <button className="crz-logout-confirm" onClick={handleLogout}>Yes</button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
-    );
-  }
+  );
+}
 
   if (screen === "customer") {
     return (
@@ -1617,7 +1707,7 @@ export default function CrunzzoDistributorDashboard() {
         <ThemeOverrides />
         <div className="bzd-shell bzd-shell-light">
           <div className="bzd-topbar-step">
-            <button type="button" className="bzd-back-btn" onClick={() => setScreen("home")}>
+            <button type="button" className="bzd-back-btn" onClick={() => goToScreen("home")}>
               ←
             </button>
             <h2>New Sale</h2>
@@ -1664,17 +1754,18 @@ export default function CrunzzoDistributorDashboard() {
                 />
               </label>
 
-              <label>
-                <span>Sales Zone</span>
-                <select name="zone" value={customer.zone} onChange={handleCustomerChange}>
-                  <option value="">Select a zone</option>
-                  <option value="North">North</option>
-                  <option value="South">South</option>
-                  <option value="East">East</option>
-                  <option value="West">West</option>
-                  <option value="Central">Central</option>
-                </select>
-              </label>
+            <label>
+              <span>Sales Pincode</span>
+              <input
+                type="tel"
+                name="pincode"
+                inputMode="numeric"
+                maxLength={6}
+                value={customer.pincode}
+                onChange={handleCustomerChange}
+                placeholder="e.g. 400097"
+              />
+            </label>
             </div>
 
             {customerError ? (
@@ -1732,7 +1823,7 @@ export default function CrunzzoDistributorDashboard() {
             }}
           >
             <div className="czd-topbar-step">
-              <button type="button" className="czd-back-btn" onClick={() => setScreen("customer")}>
+              <button type="button" className="czd-back-btn" onClick={() => goToScreen("customer")}>
                 ←
               </button>
 
@@ -1784,57 +1875,152 @@ export default function CrunzzoDistributorDashboard() {
             ) : (
               <div className="czd-product-grid">
                 {filteredProducts.map((product) => {
-                  const qty = cart[product.id] || 0;
+                  const packOptions = normalizeCrunzzoPackOptions(product);
+                  const totalAvailableUnits = getCrunzzoTotalUnits(packOptions);
+                  const primaryPrice = packOptions.find((pack) => Number(pack.rate || 0) > 0)?.rate || 0;
+                  const isOutOfStock = totalAvailableUnits <= 0;
+                  const selectedPackCount = selectedItems
+                    .filter((item) => item.productId === product.id)
+                    .reduce((sum, item) => sum + item.quantity, 0);
 
                   return (
-                    <div className="czd-product-card" key={product.id}>
+                    <div className="czd-product-card" key={product.id} style={{ opacity: isOutOfStock ? 0.6 : 1 }}>
                       <div className="czd-product-thumb">{renderProductVisual(product)}</div>
 
                       <div className="czd-product-meta">
                         <h4>{product.name}</h4>
-                        <p>{product.description || product.category || "-"}</p>
-                        <small style={{ color: Number(product.stock || 0) <= 0 ? BRAND_ACCENT : "#7d879b", fontWeight: 700 }}>
-                          {Number(product.stock || 0) <= 0 ? "OUT OF STOCK" : `${product.stock} Units Available`}
+                        <strong className="czd-product-price">
+                          {primaryPrice > 0 ? `From ${formatRupees(primaryPrice)}` : "Price not set"}
+                        </strong>
+                        <small style={{ color: isOutOfStock ? BRAND_ACCENT : "#7d879b", fontWeight: 700 }}>
+                          {isOutOfStock ? "OUT OF STOCK" : `${totalAvailableUnits} Units Available`}
                         </small>
+                        <p>{product.description || product.category || "-"}</p>
                       </div>
 
-                      {qty > 0 ? (
-                        <div className="czd-qty-row">
-                          <button type="button" onClick={() => removeFromCart(product.id)}>
-                            −
-                          </button>
-                          <span>{qty}</span>
-                          <button
-                            type="button"
-                            onClick={() => addToCart(product.id)}
-                            disabled={qty >= Number(product.stock || 0)}
-                            style={{ opacity: qty >= Number(product.stock || 0) ? 0.5 : 1 }}
-                          >
-                            +
-                          </button>
-                        </div>
-                      ) : (
-                        <button
-                          type="button"
-                          className="czd-add-btn"
-                          onClick={() => addToCart(product.id)}
-                          disabled={Number(product.stock || 0) <= 0}
-                          style={{
-                            background: Number(product.stock || 0) <= 0 ? `${BRAND_ACCENT}18` : undefined,
-                            color: Number(product.stock || 0) <= 0 ? BRAND_ACCENT : undefined,
-                            cursor: Number(product.stock || 0) <= 0 ? "not-allowed" : "pointer",
-                            border: Number(product.stock || 0) <= 0 ? `1.5px solid ${BRAND_ACCENT}40` : undefined,
-                          }}
-                        >
-                          {Number(product.stock || 0) <= 0 ? "SOLD OUT" : "ADD"}
-                        </button>
-                      )}
+                      <button
+                        type="button"
+                        className="czd-add-btn czd-add-with-options"
+                        onClick={() => setSelectedProductForPacks(product)}
+                        disabled={isOutOfStock}
+                        style={isOutOfStock ? { background: "#aab2bd", cursor: "not-allowed" } : {}}
+                      >
+                        {isOutOfStock ? (
+                          <span>OUT OF STOCK</span>
+                        ) : selectedPackCount > 0 ? (
+                          <>
+                            <span>ADD</span>
+                            <small>{selectedPackCount} Selected</small>
+                          </>
+                        ) : (
+                          <>
+                            <span>ADD</span>
+                            <small>2 Packs</small>
+                          </>
+                        )}
+                      </button>
                     </div>
                   );
                 })}
               </div>
             )}
           </div>
+
+          {selectedProductForPacksLive && (
+            <div className="czd-options-overlay">
+              <div className="czd-options-sheet">
+                <button
+                  type="button"
+                  className="czd-options-close"
+                  onClick={() => setSelectedProductForPacks(null)}
+                >
+                  x
+                </button>
+
+                <div className="czd-options-header">
+                  <button
+                    type="button"
+                    className="bzd-back-btn"
+                    onClick={() => setSelectedProductForPacks(null)}
+                  >
+                    ←
+                  </button>
+                  <div>
+                    <h3>{selectedProductForPacksLive.name}</h3>
+                    <p>{selectedProductForPacksLive.description || selectedProductForPacksLive.category || "Crunzzo SKU"}</p>
+                  </div>
+                </div>
+
+                <div className="czd-options-list">
+                  {normalizeCrunzzoPackOptions(selectedProductForPacksLive).map((pack) => {
+                    const cartKey = `${selectedProductForPacksLive.id}_${pack.id}`;
+                    const qty = cart[cartKey] || 0;
+                    const availableStock = Number(pack.stock || 0);
+                    const isPackOut = availableStock <= 0;
+
+                    return (
+                      <div className="czd-option-row" key={pack.id}>
+                        <div className="czd-option-thumb">
+                          {renderProductVisual(selectedProductForPacksLive)}
+                        </div>
+
+                        <div className="czd-option-info">
+                          <span className="czd-option-label">{pack.label}</span>
+                          <span className="czd-option-price">{formatRupees(pack.rate)}</span>
+                          <small className={isPackOut ? "czd-option-stock is-out" : "czd-option-stock"}>
+                            GST {pack.gst}% • {isPackOut ? "OUT OF STOCK" : `Available: ${availableStock}`}
+                          </small>
+                        </div>
+
+                        {qty > 0 ? (
+                          <div className="czd-option-qty">
+                            <button type="button" onClick={() => removeFromCart(selectedProductForPacksLive.id, pack.id)}>
+                              -
+                            </button>
+                            <span>{qty}</span>
+                            <button
+                              type="button"
+                              onClick={() => addToCart(selectedProductForPacksLive.id, pack.id)}
+                              disabled={qty >= availableStock}
+                            >
+                              +
+                            </button>
+                          </div>
+                        ) : (
+                          <button
+                            type="button"
+                            className={isPackOut ? "czd-option-add is-disabled" : "czd-option-add"}
+                            onClick={() => addToCart(selectedProductForPacksLive.id, pack.id)}
+                            disabled={isPackOut}
+                          >
+                            {isPackOut ? "OUT" : "ADD"}
+                          </button>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+
+                <div className="czd-options-footer">
+                  <div className="czd-options-footer-total">
+                    <small>{totalUnits} ITEMS SELECTED</small>
+                    <strong>{formatRupees(subtotal)} Total</strong>
+                  </div>
+                  <button
+                    type="button"
+                    className="czd-options-review-btn"
+                    disabled={!selectedItems.length}
+                    onClick={() => {
+                      setSelectedProductForPacks(null);
+                      moveToSummary();
+                    }}
+                  >
+                    Review Order →
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
 
           <div
             style={{
@@ -1880,7 +2066,7 @@ export default function CrunzzoDistributorDashboard() {
         <ThemeOverrides />
         <div className="bzd-shell bzd-shell-light">
           <div className="bzd-topbar-step">
-            <button type="button" className="bzd-back-btn" onClick={() => setScreen("products")}>
+            <button type="button" className="bzd-back-btn" onClick={() => goToScreen("products")}>
               ←
             </button>
             <h2>Order Summary</h2>
@@ -1910,7 +2096,7 @@ export default function CrunzzoDistributorDashboard() {
 
                   <div className="bzd-summary-copy">
                     <h4>{item.name}</h4>
-                    <p>Qty: {item.quantity} Pcs</p>
+                    <p>Qty: {item.quantity} x {item.packLabel} ({item.totalUnits} units)</p>
                     <small>{item.rateLabel}</small>
                   </div>
 
@@ -1933,7 +2119,7 @@ export default function CrunzzoDistributorDashboard() {
                 <strong className="green">-{formatRupees(wholesaleDiscount)}</strong>
               </div>
               <div>
-                <span>Tax (8%)</span>
+                <span>GST</span>
                 <strong>{formatRupees(tax)}</strong>
               </div>
             </div>
@@ -1965,7 +2151,7 @@ export default function CrunzzoDistributorDashboard() {
         <ThemeOverrides />
         <div className="bzd-shell bzd-shell-light">
           <div className="bzd-topbar-step">
-            <button type="button" className="bzd-back-btn" onClick={() => setScreen("home")}>
+            <button type="button" className="bzd-back-btn" onClick={() => goToScreen("home")}>
               ←
             </button>
             <h2>Sale Confirmation</h2>
@@ -2027,7 +2213,7 @@ export default function CrunzzoDistributorDashboard() {
             Log Another Sale
           </button>
 
-          <button type="button" className="bzd-secondary-btn" onClick={() => setScreen("home")}>
+          <button type="button" className="bzd-secondary-btn" onClick={() => goToScreen("home")}>
             Back to Home
           </button>
         </div>
@@ -2045,7 +2231,7 @@ export default function CrunzzoDistributorDashboard() {
         >
           <div style={{ flex: 1, overflowY: "auto" }}>
             <div className="bzd-topbar-step">
-              <button type="button" className="bzd-back-btn" onClick={() => setScreen("home")}>
+              <button type="button" className="bzd-back-btn" onClick={() => goToScreen("home")}>
                 ←
               </button>
               <h2>Daily Sales History</h2>
@@ -2134,9 +2320,22 @@ export default function CrunzzoDistributorDashboard() {
         <div style={{ flex: 1, overflowY: "auto" }}>
           <div className="bzd-home-topbar">
             <div className="bzd-home-left">
-              <div className="bzd-user-avatar">
-                {(userProfile?.name || "D").charAt(0).toUpperCase()}
-              </div>
+              <button
+                type="button"
+                className="czd-user-avatar"
+                onClick={() => goToScreen("profile")}
+                aria-label="Open profile"
+              >
+                {userProfile?.profileImageUrl ? (
+                  <img
+                    src={userProfile.profileImageUrl}
+                    alt={userProfile.name || "Profile"}
+                    style={{ width: "100%", height: "100%", objectFit: "cover", borderRadius: "inherit" }}
+                  />
+                ) : (
+                  (userProfile?.name || "D").charAt(0).toUpperCase()
+                )}
+              </button>
               <div>
                 <h3>Dashboard</h3>
                 <p>Welcome back, {(userProfile?.name || "Distributor").toUpperCase()}</p>
@@ -2180,7 +2379,7 @@ export default function CrunzzoDistributorDashboard() {
 
           <div className="bzd-section-head">
             <h2>Recent Activity</h2>
-            <button type="button" onClick={() => setScreen("history")}>
+            <button type="button" onClick={() => goToScreen("history")}>
               View All
             </button>
           </div>

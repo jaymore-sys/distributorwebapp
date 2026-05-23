@@ -16,6 +16,7 @@ import { getDownloadURL, ref, uploadBytes } from "firebase/storage";
 import { getFirebaseServices } from "../../firebase";
 import valenciaLogo from "../../assets/drink-valencia-logo.jpg";
 import HistoryDateFilter, { getFilterLabel, getFilterHeading } from "../../components/HistoryDateFilter";
+import { routeToChooseSelection, usePortalHistoryManager } from "../../navigation/globalNavigationManager";
 import "./valencia.css";
 
 const { auth, db, storage } = getFirebaseServices("valencia");
@@ -39,6 +40,10 @@ function formatCompactRupees(value) {
 
 function sanitizePhoneInput(value) {
   return value.replace(/\D/g, "").slice(0, 10);
+}
+
+function sanitizePincodeInput(value) {
+  return value.replace(/\D/g, "").slice(0, 6);
 }
 
 function sanitizeGstInput(value) {
@@ -199,8 +204,8 @@ function buildInvoiceHtml(order) {
                 <div class="value">${escapeHtml(order?.gst || "-")}</div>
               </div>
               <div>
-                <div class="label">Sales Zone</div>
-                <div class="value">${escapeHtml(order?.salesZone || "-")}</div>
+                <div class="label">Sales Pincode</div>
+                <div class="value">${escapeHtml(order?.salesPincode || order?.pincode || order?.salesZone || "-")}</div>
               </div>
               <div>
                 <div class="label">Distributor</div>
@@ -501,6 +506,7 @@ export default function ValenciaDistributorDashboard() {
   const fileInputRef = useRef(null);
 
   const [screen, setScreen] = useState("home");
+  const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
   const [userProfile, setUserProfile] = useState(null);
 
   const [loadingProfile, setLoadingProfile] = useState(true);
@@ -516,7 +522,7 @@ export default function ValenciaDistributorDashboard() {
     shopName: "",
     phone: "",
     gst: "",
-    zone: "",
+    pincode: "",
   });
 
   const [customerError, setCustomerError] = useState("");
@@ -542,6 +548,21 @@ export default function ValenciaDistributorDashboard() {
     territory: "",
   });
 
+  const goToScreen = usePortalHistoryManager({
+    portalKey: "valencia-distributor",
+    basePath: "/valencia/distributor",
+    rootScreen: "home",
+    currentScreen: screen,
+    setScreen,
+  });
+
+  useEffect(() => {
+    if (screen !== "products") {
+      setSelectedProductForOptions(null);
+    }
+    setShowLogoutConfirm(false);
+  }, [screen]);
+
   useEffect(() => {
     let unsubscribeOrders = () => { };
 
@@ -551,6 +572,7 @@ export default function ValenciaDistributorDashboard() {
         setOrders([]);
         setLoadingProfile(false);
         setLoadingOrders(false);
+        routeToChooseSelection(navigate);
         return;
       }
 
@@ -625,7 +647,7 @@ export default function ValenciaDistributorDashboard() {
       unsubscribeOrders();
       unsubscribeProducts();
     };
-  }, []);
+  }, [navigate]);
 
   const categoryTabs = useMemo(() => {
     const names = [...new Set(products.map((item) => (item.category || "").trim()).filter(Boolean))];
@@ -770,8 +792,8 @@ export default function ValenciaDistributorDashboard() {
       return false;
     }
 
-    if (!customer.zone.trim()) {
-      setCustomerError("Please select sales zone.");
+    if (!/^\d{6}$/.test(customer.pincode.trim())) {
+      setCustomerError("Pincode must be exactly 6 digits.");
       return false;
     }
 
@@ -784,6 +806,7 @@ export default function ValenciaDistributorDashboard() {
     let finalValue = value;
 
     if (name === "phone") finalValue = sanitizePhoneInput(value);
+    if (name === "pincode") finalValue = sanitizePincodeInput(value);
     if (name === "gst") finalValue = sanitizeGstInput(value);
 
     setCustomerError("");
@@ -862,6 +885,7 @@ export default function ValenciaDistributorDashboard() {
         ...payload,
       }));
 
+      setProfilePreview(profileImageUrl);
       setProfileImageFile(null);
       setProfileOpen(false);
       setProfileMessage("Profile updated successfully.");
@@ -876,7 +900,8 @@ export default function ValenciaDistributorDashboard() {
   const handleLogout = async () => {
     try {
       await signOut(auth);
-      navigate("/login?section=valencia", { replace: true });
+      setShowLogoutConfirm(false);
+      routeToChooseSelection(navigate);
     } catch (error) {
       console.error("Logout error:", error);
       setProfileMessage("Failed to logout.");
@@ -930,7 +955,7 @@ export default function ValenciaDistributorDashboard() {
       shopName: "",
       phone: "",
       gst: "",
-      zone: "",
+      pincode: "",
     });
     setCustomerError("");
     setCategory("all");
@@ -942,7 +967,7 @@ export default function ValenciaDistributorDashboard() {
 
   const startNewSale = () => {
     resetSaleFlow();
-    setScreen("customer");
+    goToScreen("customer");
   };
 
   const moveToProducts = () => {
@@ -950,11 +975,11 @@ export default function ValenciaDistributorDashboard() {
 
     if (pendingSummaryAfterCustomer) {
       setPendingSummaryAfterCustomer(false);
-      setScreen("summary");
+      goToScreen("summary");
       return;
     }
 
-    setScreen("products");
+    goToScreen("products");
   };
 
   const moveToSummary = () => {
@@ -962,11 +987,11 @@ export default function ValenciaDistributorDashboard() {
 
     if (!validateCustomerInputs()) {
       setPendingSummaryAfterCustomer(true);
-      setScreen("customer");
+      goToScreen("customer");
       return;
     }
 
-    setScreen("summary");
+    goToScreen("summary");
   };
 
   const buildCurrentInvoiceData = () => ({
@@ -977,7 +1002,8 @@ export default function ValenciaDistributorDashboard() {
     shopName: customer.shopName,
     phone: customer.phone,
     gst: customer.gst,
-    salesZone: customer.zone,
+    salesPincode: customer.pincode,
+    pincode: customer.pincode,
     subtotal,
     wholesaleDiscount,
     tax,
@@ -1014,7 +1040,7 @@ export default function ValenciaDistributorDashboard() {
 
     if (!validateCustomerInputs()) {
       setPendingSummaryAfterCustomer(true);
-      setScreen("customer");
+      goToScreen("customer");
       return;
     }
 
@@ -1026,7 +1052,7 @@ export default function ValenciaDistributorDashboard() {
 
     if (!validateCustomerInputs()) {
       setPendingSummaryAfterCustomer(true);
-      setScreen("customer");
+      goToScreen("customer");
       return;
     }
 
@@ -1046,7 +1072,8 @@ export default function ValenciaDistributorDashboard() {
         shopName: customer.shopName,
         phone: customer.phone,
         gst: customer.gst,
-        salesZone: customer.zone,
+        salesPincode: customer.pincode,
+        pincode: customer.pincode,
         subtotal,
         wholesaleDiscount,
         tax,
@@ -1116,7 +1143,7 @@ export default function ValenciaDistributorDashboard() {
         ...orderPayload,
       });
 
-      setScreen("success");
+      goToScreen("success");
       setCart({});
       setPendingSummaryAfterCustomer(false);
     } catch (error) {
@@ -1168,7 +1195,7 @@ export default function ValenciaDistributorDashboard() {
       <button
         type="button"
         className={active === "home" ? "active" : ""}
-        onClick={() => setScreen("home")}
+        onClick={() => goToScreen("home")}
       >
         <DashboardNavIcon type="home" active={active === "home"} />
         <span>Home</span>
@@ -1177,7 +1204,7 @@ export default function ValenciaDistributorDashboard() {
       <button
         type="button"
         className={active === "products" ? "active" : ""}
-        onClick={() => setScreen("products")}
+        onClick={() => goToScreen("products")}
       >
         <DashboardNavIcon type="products" active={active === "products"} />
         <span>Inventory</span>
@@ -1186,7 +1213,7 @@ export default function ValenciaDistributorDashboard() {
       <button
         type="button"
         className={active === "history" ? "active" : ""}
-        onClick={() => setScreen("history")}
+        onClick={() => goToScreen("history")}
       >
         <DashboardNavIcon type="history" active={active === "history"} />
         <span>Orders</span>
@@ -1195,7 +1222,7 @@ export default function ValenciaDistributorDashboard() {
       <button
         type="button"
         className={active === "profile" ? "active" : ""}
-        onClick={() => setScreen("profile")}
+        onClick={() => goToScreen("profile")}
       >
         <DashboardNavIcon type="profile" active={active === "profile"} />
         <span>Profile</span>
@@ -1525,7 +1552,7 @@ export default function ValenciaDistributorDashboard() {
                 type="button"
                 onClick={() => {
                   setHistoryFilter("month");
-                  setScreen("history");
+                  goToScreen("history");
                 }}
                 style={{
                   border: "none",
@@ -1588,14 +1615,14 @@ export default function ValenciaDistributorDashboard() {
                   icon="🗃"
                   title="Inventory Access"
                   subtitle="View real-time stock levels"
-                  onClick={() => setScreen("products")}
+                  onClick={() => goToScreen("products")}
                   accent={BRAND_ACCENT}
                 />
                 <ProfileMenuRow
                   icon="🧾"
                   title="My Sales History"
                   subtitle="Track your closed deals"
-                  onClick={() => setScreen("history")}
+                  onClick={() => goToScreen("history")}
                   accent={BRAND_ACCENT}
                 />
               </div>
@@ -1616,7 +1643,7 @@ export default function ValenciaDistributorDashboard() {
 
             <button
               type="button"
-              onClick={handleLogout}
+              onClick={() => setShowLogoutConfirm(true)}
               style={{
                 marginTop: 20,
                 width: "100%",
@@ -1636,9 +1663,22 @@ export default function ValenciaDistributorDashboard() {
 
           <div style={{ flexShrink: 0, background: "#fff" }}>{renderMobileNav("profile")}</div>
         </div>
+
+        {showLogoutConfirm && (
+          <div className="crz-logout-overlay" onClick={() => setShowLogoutConfirm(false)}>
+            <div className="crz-logout-modal" onClick={(e) => e.stopPropagation()}>
+              <h3>Logout</h3>
+              <p>Are you sure you want to logout?</p>
+              <div className="crz-logout-actions">
+                <button className="crz-logout-cancel" onClick={() => setShowLogoutConfirm(false)}>Cancel</button>
+                <button className="crz-logout-confirm vld-logout-confirm" onClick={handleLogout}>Yes</button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
-    );
-  }
+  );
+}
 
   if (screen === "customer") {
     return (
@@ -1646,7 +1686,7 @@ export default function ValenciaDistributorDashboard() {
         <ThemeOverrides />
         <div className="vld-shell vld-shell-light">
           <div className="vld-topbar-step">
-            <button type="button" className="vld-back-btn" onClick={() => setScreen("home")}>
+            <button type="button" className="vld-back-btn" onClick={() => goToScreen("home")}>
               ←
             </button>
             <h2>New Sale</h2>
@@ -1693,17 +1733,18 @@ export default function ValenciaDistributorDashboard() {
                 />
               </label>
 
-              <label>
-                <span>Sales Zone</span>
-                <select name="zone" value={customer.zone} onChange={handleCustomerChange}>
-                  <option value="">Select a zone</option>
-                  <option value="North">North</option>
-                  <option value="South">South</option>
-                  <option value="East">East</option>
-                  <option value="West">West</option>
-                  <option value="Central">Central</option>
-                </select>
-              </label>
+            <label>
+              <span>Sales Pincode</span>
+              <input
+                type="tel"
+                name="pincode"
+                inputMode="numeric"
+                maxLength={6}
+                value={customer.pincode}
+                onChange={handleCustomerChange}
+                placeholder="e.g. 400097"
+              />
+            </label>
             </div>
 
             {customerError ? (
@@ -1761,7 +1802,7 @@ export default function ValenciaDistributorDashboard() {
             }}
           >
             <div className="vld-topbar-step">
-              <button type="button" className="vld-back-btn" onClick={() => setScreen("customer")}>
+              <button type="button" className="vld-back-btn" onClick={() => goToScreen("customer")}>
                 ←
               </button>
 
@@ -1804,6 +1845,7 @@ export default function ValenciaDistributorDashboard() {
                   const productInCart = selectedItems.filter(si => si.id === product.id);
                   const totalProductQty = productInCart.reduce((s, i) => s + i.quantity, 0);
                   const isOutOfStock = Number(product.stock || 0) <= 0;
+                  const productPrice = Number(product.rate || product.price || 0);
 
                   return (
                     <div className="vld-product-card" key={product.id} style={{ opacity: isOutOfStock ? 0.6 : 1 }}>
@@ -1811,12 +1853,18 @@ export default function ValenciaDistributorDashboard() {
 
                       <div className="vld-product-meta">
                         <h4>{product.name}</h4>
-                        <p>{product.description || product.category || "-"}</p>
+                        <strong className="vld-product-price">
+                          {productPrice > 0 ? `From ${formatRupees(productPrice)}` : "Price not set"}
+                        </strong>
                         {isOutOfStock && (
                           <div style={{ marginTop: 4, color: "#ff4d4f", fontSize: 10, fontWeight: 700, textTransform: "uppercase" }}>
                             Out of Stock
                           </div>
                         )}
+                        <small style={{ color: "#7d879b", fontWeight: 700 }}>
+                          {Number(product.stock || 0)} Units Available
+                        </small>
+                        <p>{product.description || product.category || "-"}</p>
                       </div>
 
                       <button
@@ -1995,7 +2043,7 @@ export default function ValenciaDistributorDashboard() {
         <ThemeOverrides />
         <div className="vld-shell vld-shell-light">
           <div className="vld-topbar-step">
-            <button type="button" className="vld-back-btn" onClick={() => setScreen("products")}>
+            <button type="button" className="vld-back-btn" onClick={() => goToScreen("products")}>
               ←
             </button>
             <h2>Order Summary</h2>
@@ -2080,7 +2128,7 @@ export default function ValenciaDistributorDashboard() {
         <ThemeOverrides />
         <div className="vld-shell vld-shell-light">
           <div className="vld-topbar-step">
-            <button type="button" className="vld-back-btn" onClick={() => setScreen("home")}>
+            <button type="button" className="vld-back-btn" onClick={() => goToScreen("home")}>
               ←
             </button>
             <h2>Sale Confirmation</h2>
@@ -2142,7 +2190,7 @@ export default function ValenciaDistributorDashboard() {
             Log Another Sale
           </button>
 
-          <button type="button" className="vld-secondary-btn" onClick={() => setScreen("home")}>
+          <button type="button" className="vld-secondary-btn" onClick={() => goToScreen("home")}>
             Back to Home
           </button>
         </div>
@@ -2160,7 +2208,7 @@ export default function ValenciaDistributorDashboard() {
         >
           <div style={{ flex: 1, overflowY: "auto" }}>
             <div className="vld-topbar-step">
-              <button type="button" className="vld-back-btn" onClick={() => setScreen("home")}>
+              <button type="button" className="vld-back-btn" onClick={() => goToScreen("home")}>
                 ←
               </button>
               <h2>Daily Sales History</h2>
@@ -2250,9 +2298,22 @@ export default function ValenciaDistributorDashboard() {
         <div style={{ flex: 1, overflowY: "auto" }}>
           <div className="vld-home-topbar">
             <div className="vld-home-left">
-              <div className="vld-user-avatar">
-                {(userProfile?.name || "D").charAt(0).toUpperCase()}
-              </div>
+              <button
+                type="button"
+                className="vld-user-avatar"
+                onClick={() => goToScreen("profile")}
+                aria-label="Open profile"
+              >
+                {userProfile?.profileImageUrl ? (
+                  <img
+                    src={userProfile.profileImageUrl}
+                    alt={userProfile.name || "Profile"}
+                    style={{ width: "100%", height: "100%", objectFit: "cover", borderRadius: "inherit" }}
+                  />
+                ) : (
+                  (userProfile?.name || "D").charAt(0).toUpperCase()
+                )}
+              </button>
               <div>
                 <h3>Dashboard</h3>
                 <p>Welcome back, {(userProfile?.name || "Distributor").toUpperCase()}</p>
@@ -2296,7 +2357,7 @@ export default function ValenciaDistributorDashboard() {
 
           <div className="vld-section-head">
             <h2>Recent Activity</h2>
-            <button type="button" onClick={() => setScreen("history")}>
+            <button type="button" onClick={() => goToScreen("history")}>
               View All
             </button>
           </div>
@@ -2342,6 +2403,19 @@ export default function ValenciaDistributorDashboard() {
 
         <div style={{ flexShrink: 0, background: "#fff" }}>{renderMobileNav("home")}</div>
       </div>
+
+      {showLogoutConfirm && (
+        <div className="crz-logout-overlay" onClick={() => setShowLogoutConfirm(false)}>
+          <div className="crz-logout-modal" onClick={(e) => e.stopPropagation()}>
+            <h3>Logout</h3>
+            <p>Are you sure you want to logout?</p>
+            <div className="crz-logout-actions">
+              <button className="crz-logout-cancel" onClick={() => setShowLogoutConfirm(false)}>Cancel</button>
+              <button className="crz-logout-confirm vld-logout-confirm" onClick={handleLogout}>Yes</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

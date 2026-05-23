@@ -11,7 +11,7 @@ export default function CrunzzoLoginPage() {
         <p>Login page is working.</p>
 
         <div className="button-group">
-          <button onClick={() => navigate("/crunzzo/dashboard")}>
+          <button onClick={() => navigate("/crunzzo/distributor")}>
             Login as Distributor
           </button>
           <button onClick={() => navigate("/crunzzo/admin")}>

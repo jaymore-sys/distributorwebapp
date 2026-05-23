@@ -112,6 +112,23 @@ const initialSignupData = {
   confirmPassword: "",
 };
 
+function BackIcon() {
+  return (
+    <svg
+      width="18"
+      height="18"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="3"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <polyline points="15 18 9 12 15 6" />
+    </svg>
+  );
+}
+
 export default function LoginPage({ setUserProfile }) {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -164,7 +181,7 @@ export default function LoginPage({ setUserProfile }) {
       return;
     }
 
-    navigate(`/${sectionKey}/dashboard`, { replace: true });
+    navigate(`/${sectionKey}/distributor`, { replace: true });
   };
 
   const handleLogin = async (e) => {
@@ -386,6 +403,15 @@ export default function LoginPage({ setUserProfile }) {
   return (
     <div className={`crz-auth-page ${selectedBrand.accent}`}>
       <div className="crz-auth-card">
+        <button
+          type="button"
+          className="crz-back-btn"
+          onClick={() => navigate("/choose-section")}
+          aria-label="Back to Section Selection"
+        >
+          <BackIcon />
+        </button>
+
         <div className="crz-top-hero">
           <img
             src={selectedBrand.hero}
