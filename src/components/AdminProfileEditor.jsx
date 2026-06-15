@@ -119,8 +119,16 @@ export default function AdminProfileEditor({
 
   const handleInput = (event) => {
     const { name, value } = event.target;
+    let finalValue = value;
+
+    if (name === "name" || name === "businessName") {
+      finalValue = value.replace(/[0-9]/g, "");
+    } else if (name === "phone") {
+      finalValue = value.replace(/\D/g, "").slice(0, 10);
+    }
+
     setMessage("");
-    setForm((prev) => ({ ...prev, [name]: value }));
+    setForm((prev) => ({ ...prev, [name]: finalValue }));
   };
 
   const handleImagePick = (event) => {

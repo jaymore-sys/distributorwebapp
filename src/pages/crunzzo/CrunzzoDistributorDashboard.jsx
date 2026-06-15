@@ -8,6 +8,7 @@ import {
   getDoc,
   onSnapshot,
   query,
+  runTransaction,
   serverTimestamp,
   updateDoc,
   where,
@@ -17,10 +18,12 @@ import crunzzoLogo from "../../assets/crunzzologo.png";
 import { getFirebaseServices } from "../../firebase";
 import HistoryDateFilter, { getFilterLabel, getFilterHeading } from "../../components/HistoryDateFilter";
 import { routeToChooseSelection, usePortalHistoryManager } from "../../navigation/globalNavigationManager";
+import { normalizeCrunzzoPackOptions } from "../../utils/crunzzoPacks";
 import {
-  getCrunzzoTotalUnits,
-  normalizeCrunzzoPackOptions,
-} from "../../utils/crunzzoPacks";
+  getCrunzzoRegionId,
+  getCrunzzoUserRegion,
+  getRegionalRemainingUnits,
+} from "../../utils/crunzzoRegions";
 import "./crunzzo.css";
 
 const { auth, db, storage } = getFirebaseServices("crunzzo");
@@ -46,6 +49,10 @@ function sanitizePhoneInput(value) {
   return value.replace(/\D/g, "").slice(0, 10);
 }
 
+function sanitizeNameInput(value) {
+  return value.replace(/[0-9]/g, "");
+}
+
 function sanitizePincodeInput(value) {
   return value.replace(/\D/g, "").slice(0, 6);
 }
@@ -54,8 +61,11 @@ function sanitizeGstInput(value) {
   return value.toUpperCase().replace(/[^0-9A-Z]/g, "").slice(0, 15);
 }
 
-function isValidIndianGst(value) {
-  return /^\d{2}[A-Z]{5}\d{4}[A-Z][A-Z0-9]Z[A-Z0-9]$/.test(value);
+function isValidTaxId(value) {
+  const val = value.toUpperCase().trim();
+  const isGst = /^\d{2}[A-Z]{5}\d{4}[A-Z][A-Z0-9]Z[A-Z0-9]$/.test(val);
+  const isPan = /^[A-Z]{5}\d{4}[A-Z]$/.test(val);
+  return isGst || isPan;
 }
 
 function getAvatarBg(index) {
@@ -204,7 +214,7 @@ function buildInvoiceHtml(order) {
                 <div class="value">${escapeHtml(order?.phone || "-")}</div>
               </div>
               <div>
-                <div class="label">GST Number</div>
+                <div class="label">GST/PAN Number</div>
                 <div class="value">${escapeHtml(order?.gst || "-")}</div>
               </div>
               <div>
@@ -544,10 +554,13 @@ export default function CrunzzoDistributorDashboard() {
 
   const [loadingProfile, setLoadingProfile] = useState(true);
   const [loadingProducts, setLoadingProducts] = useState(true);
+  const [loadingRegionalInventory, setLoadingRegionalInventory] = useState(true);
+  const [regionalInventoryErrors, setRegionalInventoryErrors] = useState({});
   const [loadingOrders, setLoadingOrders] = useState(true);
   const [submittingOrder, setSubmittingOrder] = useState(false);
 
   const [products, setProducts] = useState([]);
+  const [regionalInventory, setRegionalInventory] = useState({});
   const [orders, setOrders] = useState([]);
   const [lastOrder, setLastOrder] = useState(null);
 
@@ -601,6 +614,7 @@ export default function CrunzzoDistributorDashboard() {
         setUserProfile(null);
         setOrders([]);
         setLoadingProfile(false);
+        setLoadingRegionalInventory(false);
         setLoadingOrders(false);
         routeToChooseSelection(navigate);
         return;
@@ -616,14 +630,39 @@ export default function CrunzzoDistributorDashboard() {
           ...profileData,
         };
 
-        setUserProfile(merged);
+        if (merged.role === "super_stockist") {
+          setLoadingProfile(false);
+          setLoadingRegionalInventory(false);
+          setLoadingOrders(false);
+          navigate("/crunzzo/super-stockist", { replace: true });
+          return;
+        }
+
+        if (merged.role === "admin") {
+          setLoadingProfile(false);
+          setLoadingRegionalInventory(false);
+          setLoadingOrders(false);
+          navigate("/crunzzo/admin", { replace: true });
+          return;
+        }
+
+        const region = getCrunzzoUserRegion(merged);
+        const regionId = getCrunzzoRegionId(region);
+        const regionalProfile = { ...merged, region };
+
+        setUserProfile(regionalProfile);
         setProfileForm({
-          name: merged.name || "",
-          businessName: merged.businessName || "",
-          phone: merged.phone || "",
-          territory: merged.territory || merged.zone || "North Region",
+          name: regionalProfile.name || "",
+          businessName: regionalProfile.businessName || "",
+          phone: regionalProfile.phone || "",
+          territory: regionalProfile.territory || regionalProfile.zone || "North Region",
         });
-        setProfilePreview(merged.profileImageUrl || "");
+        setProfilePreview(regionalProfile.profileImageUrl || "");
+
+        if (!regionId) {
+          setRegionalInventory({});
+          setLoadingRegionalInventory(false);
+        }
 
         unsubscribeOrders = onSnapshot(
           query(collection(db, "orders"), where("distributorUid", "==", user.uid)),
@@ -643,9 +682,11 @@ export default function CrunzzoDistributorDashboard() {
             setLoadingOrders(false);
           }
         );
+
       } catch (error) {
         console.error("Profile fetch error:", error);
         setLoadingProfile(false);
+        setLoadingRegionalInventory(false);
         setLoadingOrders(false);
       } finally {
         setLoadingProfile(false);
@@ -678,6 +719,65 @@ export default function CrunzzoDistributorDashboard() {
       unsubscribeProducts();
     };
   }, [navigate]);
+
+  useEffect(() => {
+    const regionId = getCrunzzoRegionId(userProfile?.region);
+    if (!userProfile?.uid || !regionId) return undefined;
+    if (!products.length) {
+      if (!loadingProducts) {
+        setRegionalInventory({});
+        setRegionalInventoryErrors({});
+        setLoadingRegionalInventory(false);
+      }
+      return undefined;
+    }
+
+    let active = true;
+    const pendingProductIds = new Set(products.map((product) => product.id));
+    const nextErrors = {};
+
+    setLoadingRegionalInventory(true);
+    setRegionalInventory({});
+    setRegionalInventoryErrors({});
+
+    const finishProduct = (productId) => {
+      pendingProductIds.delete(productId);
+      if (!active || pendingProductIds.size) return;
+      setRegionalInventoryErrors(nextErrors);
+      setLoadingRegionalInventory(false);
+    };
+
+    const unsubscribers = products.map((product) =>
+      onSnapshot(
+        doc(db, "regional_inventory", regionId, "products", product.id),
+        (snapshot) => {
+          if (!active) return;
+
+          setRegionalInventory((previous) => {
+            const next = { ...previous };
+            if (snapshot.exists()) {
+              next[product.id] = { id: snapshot.id, ...snapshot.data() };
+            } else {
+              delete next[product.id];
+            }
+            return next;
+          });
+          delete nextErrors[product.id];
+          finishProduct(product.id);
+        },
+        (error) => {
+          if (!active) return;
+          nextErrors[product.id] = error.code || "regional-stock-unavailable";
+          finishProduct(product.id);
+        }
+      )
+    );
+
+    return () => {
+      active = false;
+      unsubscribers.forEach((unsubscribe) => unsubscribe());
+    };
+  }, [loadingProducts, products, userProfile?.region, userProfile?.uid]);
 
   const categoryTabs = useMemo(() => {
     const names = [...new Set(products.map((item) => (item.category || "").trim()).filter(Boolean))];
@@ -808,12 +908,12 @@ export default function CrunzzoDistributorDashboard() {
     }
 
     if (!customer.gst.trim()) {
-      setCustomerError("Please enter GST number.");
+      setCustomerError("Please enter GST or PAN number.");
       return false;
     }
 
-    if (!isValidIndianGst(customer.gst.trim())) {
-      setCustomerError("Please enter a valid 15-character GST number.");
+    if (!isValidTaxId(customer.gst.trim())) {
+      setCustomerError("Please enter a valid 15-character GST or 10-character PAN number.");
       return false;
     }
 
@@ -847,6 +947,8 @@ export default function CrunzzoDistributorDashboard() {
 
     if (name === "phone") {
       finalValue = sanitizePhoneInput(value);
+    } else if (name === "name" || name === "businessName") {
+      finalValue = sanitizeNameInput(value);
     }
 
     setProfileMessage("");
@@ -933,16 +1035,51 @@ export default function CrunzzoDistributorDashboard() {
     }
   };
 
+  const getRegionalStockState = (productId) => {
+    const allocation = regionalInventory[productId];
+    if (allocation) {
+      return {
+        availableUnits: getRegionalRemainingUnits(allocation),
+        isAvailable: true,
+      };
+    }
+
+    const product = products.find((item) => item.id === productId);
+    const regionId = getCrunzzoRegionId(userProfile?.region);
+    const projectedStock = product?.regionalStock?.[regionId];
+    if (projectedStock !== undefined && Number.isFinite(Number(projectedStock))) {
+      return {
+        availableUnits: Math.max(0, Number(projectedStock)),
+        isAvailable: true,
+      };
+    }
+
+    return {
+      availableUnits: 0,
+      isAvailable: !regionalInventoryErrors[productId],
+    };
+  };
+
+  const getRegionalAvailableUnits = (productId) =>
+    getRegionalStockState(productId).availableUnits;
+
+  const regionalStockUnavailable = Boolean(
+    products.some((product) => !getRegionalStockState(product.id).isAvailable)
+  );
+
   const addToCart = (productId, packId) => {
     const product = products.find((p) => p.id === productId);
     const pack = normalizeCrunzzoPackOptions(product).find((item) => item.id === packId);
     if (!pack) return;
 
     const cartKey = `${productId}_${packId}`;
-    const availableStock = Number(pack.stock || 0);
     const currentQty = cart[cartKey] || 0;
+    const availableUnits = getRegionalAvailableUnits(productId);
+    const selectedUnitsForProduct = selectedItems
+      .filter((item) => item.productId === productId)
+      .reduce((sum, item) => sum + Number(item.totalUnits || 0), 0);
 
-    if (currentQty >= availableStock) {
+    if (selectedUnitsForProduct + Number(pack.packSize || 0) > availableUnits) {
       return;
     }
 
@@ -1090,6 +1227,7 @@ export default function CrunzzoDistributorDashboard() {
         distributorUid: userProfile.uid,
         distributorName: userProfile.name || auth.currentUser?.displayName || "Distributor",
         distributorId: userProfile.distributorId || "",
+        region: userProfile.region,
         shopName: customer.shopName,
         phone: customer.phone,
         gst: customer.gst,
@@ -1127,37 +1265,66 @@ export default function CrunzzoDistributorDashboard() {
         }),
       };
 
-      // 1. Save the Order
-      let savedRef;
-      try {
-        savedRef = await addDoc(collection(db, "orders"), orderPayload);
-      } catch (err) {
-        console.error("Order Creation Error:", err);
-        throw new Error(`Order creation failed: ${err.message}`);
-      }
+      // Save the sale first so inventory permissions cannot block an order.
+      const savedRef = await addDoc(collection(db, "orders"), orderPayload);
+      const regionId = getCrunzzoRegionId(userProfile.region);
 
-      // 2. Update Stock (best-effort - distributor may lack write access to products)
-      try {
-        for (const item of selectedItems) {
-          const productRef = doc(db, "products", item.productId);
-          const productSnap = await getDoc(productRef);
-          if (productSnap.exists()) {
-            const packOptions = normalizeCrunzzoPackOptions(productSnap.data()).map((pack) => {
-              if (pack.id !== item.packId) return pack;
-              return {
-                ...pack,
-                stock: Math.max(0, Number(pack.stock || 0) - item.quantity),
+      if (regionId) {
+        const stockChanges = selectedItems.reduce((acc, item) => {
+          acc[item.productId] = (acc[item.productId] || 0) + Number(item.totalUnits);
+          return acc;
+        }, {});
+
+        try {
+          await runTransaction(db, async (transaction) => {
+            const stockSnapshots = {};
+
+            for (const productId of Object.keys(stockChanges)) {
+              const productRef = doc(db, "products", productId);
+              const allocationDocId = regionalInventory[productId]?.id || productId;
+              const allocationRef = doc(
+                db,
+                "regional_inventory",
+                regionId,
+                "products",
+                allocationDocId
+              );
+              stockSnapshots[productId] = {
+                product: await transaction.get(productRef),
+                allocation: await transaction.get(allocationRef),
               };
-            });
+            }
 
-            await updateDoc(productRef, {
-              packOptions,
-              stock: getCrunzzoTotalUnits(packOptions),
-            });
-          }
+            for (const [productId, unitsToSubtract] of Object.entries(stockChanges)) {
+              const { product, allocation } = stockSnapshots[productId];
+              if (!product.exists() || !allocation.exists()) {
+                throw new Error(`Regional stock data is unavailable for product ${productId}.`);
+              }
+
+              const currentStock = Number(product.data().stock || 0);
+              const regionalStock = getRegionalRemainingUnits(allocation.data());
+              if (currentStock < unitsToSubtract || regionalStock < unitsToSubtract) {
+                throw new Error(`Regional stock changed before the sale could be synchronized.`);
+              }
+
+              transaction.update(product.ref, {
+                stock: currentStock - unitsToSubtract,
+                regionalStock: {
+                  ...(product.data().regionalStock || {}),
+                  [regionId]: regionalStock - unitsToSubtract,
+                },
+                updatedAtMs: Date.now(),
+              });
+              transaction.update(allocation.ref, {
+                fulfilledUnits: Number(allocation.data().fulfilledUnits || 0) + unitsToSubtract,
+                updatedAt: serverTimestamp(),
+                updatedAtMs: Date.now(),
+              });
+            }
+          });
+        } catch (stockError) {
+          console.warn("Regional stock sync skipped:", stockError.message);
         }
-      } catch (err) {
-        console.warn("Stock sync skipped (permissions):", err.message);
       }
 
       setLastOrder({
@@ -1251,7 +1418,7 @@ export default function CrunzzoDistributorDashboard() {
     </div>
   );
 
-  if (loadingProfile || loadingProducts || loadingOrders) {
+  if (loadingProfile || loadingProducts || loadingRegionalInventory || loadingOrders) {
     return (
       <div className="bzd-page" data-brand="crunzzo">
         <ThemeOverrides />
@@ -1743,14 +1910,14 @@ export default function CrunzzoDistributorDashboard() {
               </label>
 
               <label>
-                <span>GST Number</span>
+                <span>GST or PAN Number</span>
                 <input
                   type="text"
                   name="gst"
                   maxLength={15}
                   value={customer.gst}
                   onChange={handleCustomerChange}
-                  placeholder="22AAAAA0000A1Z5"
+                  placeholder="GST or PAN Card Number"
                 />
               </label>
 
@@ -1810,8 +1977,10 @@ export default function CrunzzoDistributorDashboard() {
           style={{
             display: "flex",
             flexDirection: "column",
-            minHeight: "100vh",
+            minHeight: "100dvh",
+            height: "100dvh",
             overflow: "hidden",
+            padding: "16px 16px 0",
           }}
         >
           <div
@@ -1845,6 +2014,16 @@ export default function CrunzzoDistributorDashboard() {
               />
             </div>
 
+            <div className="czd-regional-stock-note">
+              Showing stock allocated to <strong>{userProfile.region}</strong> only
+            </div>
+
+            {regionalStockUnavailable ? (
+              <div className="czd-regional-stock-warning">
+                Regional stock is temporarily unavailable. It has not been marked as zero.
+              </div>
+            ) : null}
+
             <div className="czd-filter-row">
               {categoryTabs.map((tab) => (
                 <button
@@ -1876,15 +2055,17 @@ export default function CrunzzoDistributorDashboard() {
               <div className="czd-product-grid">
                 {filteredProducts.map((product) => {
                   const packOptions = normalizeCrunzzoPackOptions(product);
-                  const totalAvailableUnits = getCrunzzoTotalUnits(packOptions);
+                  const regionalStockState = getRegionalStockState(product.id);
+                  const totalAvailableUnits = regionalStockState.availableUnits;
                   const primaryPrice = packOptions.find((pack) => Number(pack.rate || 0) > 0)?.rate || 0;
                   const isOutOfStock = totalAvailableUnits <= 0;
+                  const isStockUnavailable = !regionalStockState.isAvailable;
                   const selectedPackCount = selectedItems
                     .filter((item) => item.productId === product.id)
                     .reduce((sum, item) => sum + item.quantity, 0);
 
                   return (
-                    <div className="czd-product-card" key={product.id} style={{ opacity: isOutOfStock ? 0.6 : 1 }}>
+                    <div className="czd-product-card" key={product.id} style={{ opacity: isOutOfStock || isStockUnavailable ? 0.6 : 1 }}>
                       <div className="czd-product-thumb">{renderProductVisual(product)}</div>
 
                       <div className="czd-product-meta">
@@ -1893,7 +2074,11 @@ export default function CrunzzoDistributorDashboard() {
                           {primaryPrice > 0 ? `From ${formatRupees(primaryPrice)}` : "Price not set"}
                         </strong>
                         <small style={{ color: isOutOfStock ? BRAND_ACCENT : "#7d879b", fontWeight: 700 }}>
-                          {isOutOfStock ? "OUT OF STOCK" : `${totalAvailableUnits} Units Available`}
+                          {isStockUnavailable
+                            ? "STOCK UNAVAILABLE"
+                            : isOutOfStock
+                              ? "OUT OF STOCK"
+                              : `${totalAvailableUnits} Units in ${userProfile.region}`}
                         </small>
                         <p>{product.description || product.category || "-"}</p>
                       </div>
@@ -1902,10 +2087,12 @@ export default function CrunzzoDistributorDashboard() {
                         type="button"
                         className="czd-add-btn czd-add-with-options"
                         onClick={() => setSelectedProductForPacks(product)}
-                        disabled={isOutOfStock}
-                        style={isOutOfStock ? { background: "#aab2bd", cursor: "not-allowed" } : {}}
+                        disabled={isOutOfStock || isStockUnavailable}
+                        style={isOutOfStock || isStockUnavailable ? { background: "#aab2bd", cursor: "not-allowed" } : {}}
                       >
-                        {isOutOfStock ? (
+                        {isStockUnavailable ? (
+                          <span>UNAVAILABLE</span>
+                        ) : isOutOfStock ? (
                           <span>OUT OF STOCK</span>
                         ) : selectedPackCount > 0 ? (
                           <>
@@ -1955,7 +2142,18 @@ export default function CrunzzoDistributorDashboard() {
                   {normalizeCrunzzoPackOptions(selectedProductForPacksLive).map((pack) => {
                     const cartKey = `${selectedProductForPacksLive.id}_${pack.id}`;
                     const qty = cart[cartKey] || 0;
-                    const availableStock = Number(pack.stock || 0);
+                    const regionalUnits = getRegionalAvailableUnits(selectedProductForPacksLive.id);
+                    const selectedUnitsForProduct = selectedItems
+                      .filter((item) => item.productId === selectedProductForPacksLive.id)
+                      .reduce((sum, item) => sum + Number(item.totalUnits || 0), 0);
+                    const unitsSelectedInThisPack = qty * Number(pack.packSize || 0);
+                    const unitsAvailableForThisPack = Math.max(
+                      0,
+                      regionalUnits - (selectedUnitsForProduct - unitsSelectedInThisPack)
+                    );
+                    const availableStock = Math.floor(
+                      unitsAvailableForThisPack / Math.max(1, Number(pack.packSize || 1))
+                    );
                     const isPackOut = availableStock <= 0;
 
                     return (
@@ -1968,7 +2166,7 @@ export default function CrunzzoDistributorDashboard() {
                           <span className="czd-option-label">{pack.label}</span>
                           <span className="czd-option-price">{formatRupees(pack.rate)}</span>
                           <small className={isPackOut ? "czd-option-stock is-out" : "czd-option-stock"}>
-                            GST {pack.gst}% • {isPackOut ? "OUT OF STOCK" : `Available: ${availableStock}`}
+                            GST {pack.gst}% • {isPackOut ? "OUT OF STOCK" : `${availableStock} packs in ${userProfile.region}`}
                           </small>
                         </div>
 
@@ -2023,6 +2221,7 @@ export default function CrunzzoDistributorDashboard() {
           )}
 
           <div
+            className="czd-bottom-nav-container"
             style={{
               flexShrink: 0,
               background: "#fff",

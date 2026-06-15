@@ -733,12 +733,21 @@ export default function BounceAdminDashboard() {
         @media (max-width: 480px) {
           .admin-page-wrapper {
             padding: 0 !important;
+            height: 100dvh !important;
+            min-height: 100dvh !important;
           }
           .admin-shell-wrapper {
             max-width: none !important;
-            min-height: 100vh !important;
+            height: 100dvh !important;
+            min-height: 100dvh !important;
             border: none !important;
             box-shadow: none !important;
+          }
+          .admin-content-area {
+            padding-bottom: 20px !important;
+          }
+          .admin-footer-bar {
+            padding-bottom: calc(8px + env(safe-area-inset-bottom)) !important;
           }
         }
       `}</style>
@@ -760,6 +769,7 @@ export default function BounceAdminDashboard() {
         }}
       >
         <div
+          className="admin-content-area"
           style={{
             flex: 1,
             overflowY: "auto",
@@ -2023,6 +2033,7 @@ export default function BounceAdminDashboard() {
         </div>
 
         <div
+          className="admin-footer-bar"
           style={{
             flexShrink: 0,
             background: "#fff",

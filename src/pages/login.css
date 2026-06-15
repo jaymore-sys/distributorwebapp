@@ -120,7 +120,8 @@
   color: #20263a;
 }
 
-.crz-field input {
+.crz-field input,
+.crz-field select {
   width: 100%;
   height: 46px;
   border: 1px solid #d7dde8;
@@ -147,7 +148,8 @@
   box-shadow: 0 0 0 3px rgba(83, 182, 226, 0.08);
 }
 
-.crz-auth-page.red .crz-field input:focus {
+.crz-auth-page.red .crz-field input:focus,
+.crz-auth-page.red .crz-field select:focus {
   border-color: #ea2a2a;
   box-shadow: 0 0 0 3px rgba(234, 42, 42, 0.08);
 }

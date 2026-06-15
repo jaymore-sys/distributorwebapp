@@ -42,6 +42,10 @@ function sanitizePhoneInput(value) {
   return value.replace(/\D/g, "").slice(0, 10);
 }
 
+function sanitizeNameInput(value) {
+  return value.replace(/[0-9]/g, "");
+}
+
 function sanitizePincodeInput(value) {
   return value.replace(/\D/g, "").slice(0, 6);
 }
@@ -726,6 +730,8 @@ export default function BounceDistributorDashboard() {
 
     if (name === "phone") {
       finalValue = sanitizePhoneInput(value);
+    } else if (name === "name" || name === "businessName") {
+      finalValue = sanitizeNameInput(value);
     }
 
     setProfileMessage("");
@@ -1595,7 +1601,7 @@ export default function BounceDistributorDashboard() {
     );
   } else if (screen === "products") {
     content = (
-      <div className="bzd-shell bzd-shell-light" style={{ display: "flex", flexDirection: "column", minHeight: "100vh", overflow: "hidden" }}>
+      <div className="bzd-shell bzd-shell-light" style={{ display: "flex", flexDirection: "column", minHeight: "100dvh", height: "100dvh", overflow: "hidden", padding: "16px 16px 0" }}>
         <div style={{ flex: 1, minHeight: 0, overflowY: "auto", paddingBottom: 14 }}>
           <div className="bzd-topbar-step">
             <button type="button" className="bzd-back-btn" onClick={() => goToScreen("customer")}>

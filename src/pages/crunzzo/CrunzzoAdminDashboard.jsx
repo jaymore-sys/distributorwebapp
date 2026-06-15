@@ -8,6 +8,7 @@ import {
   doc,
   getDoc,
   onSnapshot,
+  runTransaction,
   serverTimestamp,
   updateDoc,
 } from "firebase/firestore";
@@ -24,8 +25,13 @@ import {
   getCrunzzoTotalUnits,
   isCrunzzoLowStock,
   normalizeCrunzzoPackOptions,
+  toNumber,
 } from "../../utils/crunzzoPacks";
 import HistoryDateFilter, { getFilterLabel, getFilterHeading } from "../../components/HistoryDateFilter";
+import {
+  CRUNZZO_REGIONS,
+  getRegionalRemainingUnits,
+} from "../../utils/crunzzoRegions";
 
 const { auth, db, storage } = getFirebaseServices("crunzzo");
 
@@ -55,6 +61,20 @@ const ZONES = ["Chennai", "Hyderabad", "Tamil Nadu", "Karnataka"];
 const CATEGORY_OPTIONS = ["Chips", "Puffs", "Namkeen", "Masala", "Snacks"];
 const ADD_CATEGORY_VALUE = "__add_new_category__";
 const PRICING_GROUPS = ["Standard Retail", "Wholesale", "Distributor"];
+const PINCODE_CITY_CACHE_KEY = "crunzzo_pincode_city_cache_v1";
+const PINCODE_CITY_OVERRIDES = {
+  "400086": "Ghatkopar West",
+  "400088": "Govandi",
+  "400097": "Malad East",
+};
+const EMPTY_SKU_STAT = {
+  productId: "",
+  name: "No sales yet",
+  category: "",
+  imageUrl: "",
+  units: 0,
+  salesValue: 0,
+};
 
 function formatRupees(value) {
   return `₹${Number(value || 0).toLocaleString("en-IN", {
@@ -72,7 +92,11 @@ function formatCompact(value) {
 }
 
 function sanitizeNumber(value) {
-  return value.replace(/[^\d]/g, "");
+  let cleaned = value.replace(/[^\d]/g, "");
+  if (cleaned.length > 1 && cleaned.startsWith("0")) {
+    cleaned = cleaned.replace(/^0+/, "");
+  }
+  return cleaned;
 }
 
 function formatTime(value) {
@@ -90,42 +114,122 @@ function formatTime(value) {
   }
 }
 
-function getTopSku(orders) {
+function isValidPincode(value) {
+  return /^\d{6}$/.test(String(value || "").trim());
+}
+
+function readPincodeCityCache() {
+  if (typeof window === "undefined") return {};
+
+  try {
+    const saved = window.localStorage.getItem(PINCODE_CITY_CACHE_KEY);
+    return saved ? JSON.parse(saved) : {};
+  } catch {
+    return {};
+  }
+}
+
+function savePincodeCityCache(cache) {
+  if (typeof window === "undefined") return;
+
+  try {
+    window.localStorage.setItem(PINCODE_CITY_CACHE_KEY, JSON.stringify(cache));
+  } catch {
+    // Cache failures should never block dashboard data.
+  }
+}
+
+function getPincodeCityFromResponse(data) {
+  const postOffices = Array.isArray(data?.[0]?.PostOffice) ? data[0].PostOffice : [];
+  const office =
+    postOffices.find((item) => String(item?.DeliveryStatus || "").toLowerCase() === "delivery") ||
+    postOffices[0];
+
+  return String(office?.Name || office?.Block || office?.District || "").trim();
+}
+
+async function fetchPincodeCity(pincode) {
+  const response = await fetch(`https://api.postalpincode.in/pincode/${pincode}`);
+  if (!response.ok) return "";
+
+  const data = await response.json();
+  return getPincodeCityFromResponse(data);
+}
+
+function formatPincodeLabel(pincode, cityLookup = {}, savedCity = "") {
+  const normalized = String(pincode || "").trim();
+  if (!normalized || normalized.toLowerCase() === "unassigned") return "Unassigned";
+
+  const city = PINCODE_CITY_OVERRIDES[normalized] || savedCity || cityLookup[normalized] || "";
+  return city ? `${city} - ${normalized}` : normalized;
+}
+
+function getItemUnits(item) {
+  const directUnits = Number(item.totalUnits);
+  if (Number.isFinite(directUnits) && directUnits > 0) return directUnits;
+
+  const quantity = Number(item.quantity || 0);
+  const packSize = Math.max(1, Number(item.packSize || item.unitCount || 1));
+  return quantity * packSize;
+}
+
+function getItemSalesValue(item) {
+  const lineTotal = Number(item.lineTotal);
+  if (Number.isFinite(lineTotal) && lineTotal > 0) return lineTotal;
+
+  const quantity = Number(item.quantity || 0);
+  const rate = Number(item.rate || item.price || 0);
+  return quantity * rate;
+}
+
+function getSkuStats(orders) {
   const map = {};
   orders.forEach((order) => {
     (order.items || []).forEach((item) => {
-      const key = item.productId || item.name || "Unknown SKU";
+      const key = item.productId || String(item.name || "Unknown SKU").trim().toLowerCase();
       if (!map[key]) {
         map[key] = {
           productId: item.productId || "",
           name: item.name || "Unknown SKU",
+          category: item.category || "",
           imageUrl: item.imageUrl || "",
           units: 0,
+          salesValue: 0,
         };
       }
-      map[key].units += Number(item.quantity || 0);
+      map[key].units += getItemUnits(item);
+      map[key].salesValue += getItemSalesValue(item);
     });
   });
 
-  const entries = Object.values(map).sort((a, b) => b.units - a.units);
-  if (!entries.length) return { productId: "", name: "No sales yet", imageUrl: "", units: 0 };
-  return entries[0];
+  return Object.values(map).sort((a, b) => b.units - a.units || b.salesValue - a.salesValue);
 }
 
 function getPincodeStats(orders) {
   const map = {};
   orders.forEach((order) => {
     const pincode = String(order.salesPincode || order.pincode || "").trim() || "Unassigned";
-    map[pincode] = (map[pincode] || 0) + Number(order.total || 0);
+    if (!map[pincode]) {
+      map[pincode] = {
+        city: "",
+        value: 0,
+      };
+    }
+
+    map[pincode].value += Number(order.total || 0);
+    if (!map[pincode].city) {
+      map[pincode].city = String(order.salesCity || order.city || order.area || order.salesZone || "").trim();
+    }
   });
 
-  const entries = Object.entries(map).sort((a, b) => b[1] - a[1]);
-  const max = entries.length ? entries[0][1] : 1;
+  const entries = Object.entries(map).sort((a, b) => b[1].value - a[1].value);
+  const max = entries.length ? entries[0][1].value : 1;
 
-  return entries.map(([name, value]) => ({
+  return entries.map(([name, item]) => ({
     name,
-    value,
-    percent: Math.max(8, Math.round((value / max) * 100)),
+    city: item.city,
+    value: item.value,
+    percent: Math.max(8, Math.round((item.value / max) * 100)),
   }));
 }
 
@@ -135,7 +239,7 @@ function AdminTab({ active, label, onClick }) {
       type="button"
       onClick={onClick}
       style={{
-        flex: 1,
+        flex: "1 1 0",
         height: 40,
         border: "none",
         borderRadius: 12,
@@ -211,6 +315,17 @@ export default function CrunzzoAdminDashboard() {
 
   const [products, setProducts] = useState([]);
   const [orders, setOrders] = useState([]);
+  const [regionalAllocations, setRegionalAllocations] = useState({});
+  const [loadedAllocationRegions, setLoadedAllocationRegions] = useState({});
+  const [allocationDrafts, setAllocationDrafts] = useState({});
+  const [allocationMessage, setAllocationMessage] = useState("");
+  const [allocationSearch, setAllocationSearch] = useState("");
+  const [allocationCategoryFilter, setAllocationCategoryFilter] = useState("All");
+  const [expandedAllocationProductId, setExpandedAllocationProductId] = useState(null);
+  const [savingAllocationId, setSavingAllocationId] = useState("");
+  const [allocationErrorModal, setAllocationErrorModal] = useState(null);
+  const [pincodeCityLookup, setPincodeCityLookup] = useState(readPincodeCityCache);
+  const regionalProjectionSyncKeyRef = useRef("");
 
   const [inventorySearch, setInventorySearch] = useState("");
   const [salesSearch, setSalesSearch] = useState("");
@@ -231,16 +346,15 @@ export default function CrunzzoAdminDashboard() {
     skuCode: "",
     category: "Chips",
     zones: [],
+    stock: "0",
+    gst: "18",
+    lowStockThreshold: "20",
+    pack12Size: "12",
     pack12PricingGroup: "Standard Retail",
     pack12Rate: "",
-    pack12Stock: "0",
-    pack12Gst: "18",
-    pack12LowStockThreshold: "20",
+    pack240Size: "240",
     pack240PricingGroup: "Standard Retail",
     pack240Rate: "",
-    pack240Stock: "0",
-    pack240Gst: "18",
-    pack240LowStockThreshold: "2",
   });
   const [customCategoryOptions, setCustomCategoryOptions] = useState([]);
   const [categoryModalOpen, setCategoryModalOpen] = useState(false);
@@ -260,8 +374,13 @@ export default function CrunzzoAdminDashboard() {
   });
 
   useEffect(() => {
+    if (activeTab === "requests") goToTab("dashboard", { replace: true });
+  }, [activeTab, goToTab]);
+
+  useEffect(() => {
     let unsubProducts = () => {};
     let unsubOrders = () => {};
+    const unsubAllocations = [];
 
     const unsubAuth = onAuthStateChanged(auth, async (user) => {
       if (!user) {
@@ -296,6 +415,31 @@ export default function CrunzzoAdminDashboard() {
             .sort((a, b) => Number(b.createdAtMs || 0) - Number(a.createdAtMs || 0));
           setOrders(rows);
         });
+
+        CRUNZZO_REGIONS.forEach((region) => {
+          const unsubscribe = onSnapshot(
+            collection(db, "regional_inventory", region.id, "products"),
+            (snapshot) => {
+              setRegionalAllocations((previous) => ({
+                ...previous,
+                [region.id]: Object.fromEntries(
+                  snapshot.docs.map((item) => {
+                    const allocation = item.data();
+                    return [
+                      allocation.productId || item.id,
+                      { id: item.id, ...allocation },
+                    ];
+                  })
+                ),
+              }));
+              setLoadedAllocationRegions((previous) => ({
+                ...previous,
+                [region.id]: true,
+              }));
+            }
+          );
+          unsubAllocations.push(unsubscribe);
+        });
       } catch (error) {
         console.error("Admin auth/profile error:", error);
       } finally {
@@ -307,6 +451,7 @@ export default function CrunzzoAdminDashboard() {
       unsubAuth();
       unsubProducts();
       unsubOrders();
+      unsubAllocations.forEach((unsubscribe) => unsubscribe());
     };
   }, [navigate]);
 
@@ -378,7 +523,16 @@ export default function CrunzzoAdminDashboard() {
     return filteredSales.reduce((sum, item) => sum + Number(item.total || 0), 0);
   }, [filteredSales]);
 
-  const topSku = useMemo(() => getTopSku(orders), [orders]);
+  const totalUnitsSold = useMemo(() => {
+    return orders.reduce(
+      (sum, order) =>
+        sum + (order.items || []).reduce((s, i) => s + Number(i.totalUnits || i.quantity || 0), 0),
+      0
+    );
+  }, [orders]);
+
+  const skuStats = useMemo(() => getSkuStats(orders), [orders]);
+  const topSku = useMemo(() => skuStats[0] || EMPTY_SKU_STAT, [skuStats]);
   const topSkuProduct = useMemo(() => {
     const topName = (topSku.name || "").trim().toLowerCase();
     return products.find((item) => {
@@ -386,6 +540,45 @@ export default function CrunzzoAdminDashboard() {
     });
   }, [products, topSku]);
   const pincodeStats = useMemo(() => getPincodeStats(orders), [orders]);
+
+  useEffect(() => {
+    const pendingPincodes = pincodeStats
+      .filter((item) => !item.city)
+      .map((item) => String(item.name || "").trim())
+      .filter((pincode) => isValidPincode(pincode) && !PINCODE_CITY_OVERRIDES[pincode] && !pincodeCityLookup[pincode]);
+
+    if (!pendingPincodes.length) return undefined;
+
+    let cancelled = false;
+    Promise.all(
+      [...new Set(pendingPincodes)].map(async (pincode) => {
+        try {
+          return [pincode, await fetchPincodeCity(pincode)];
+        } catch {
+          return [pincode, ""];
+        }
+      })
+    ).then((results) => {
+      if (cancelled) return;
+
+      const resolved = results.filter(([, city]) => city);
+      if (!resolved.length) return;
+
+      setPincodeCityLookup((prev) => {
+        const next = { ...prev };
+        resolved.forEach(([pincode, city]) => {
+          next[pincode] = city;
+        });
+        savePincodeCityCache(next);
+        return next;
+      });
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [pincodeCityLookup, pincodeStats]);
+
   const categoryOptions = useMemo(() => {
     const productCategories = products.map((item) => item.category || "");
     return [...new Set([...CATEGORY_OPTIONS, ...customCategoryOptions, ...productCategories, productForm.category])]
@@ -403,15 +596,266 @@ export default function CrunzzoAdminDashboard() {
     }
   };
 
+  const getAllocationForRegion = (regionId, productId) =>
+    regionalAllocations[regionId]?.[productId] || null;
+
+  useEffect(() => {
+    const allRegionsLoaded = CRUNZZO_REGIONS.every(
+      (region) => loadedAllocationRegions[region.id]
+    );
+    if (userProfile?.role !== "admin" || !allRegionsLoaded || !products.length) return;
+
+    const projections = products.map((product) => ({
+      product,
+      regionalStock: Object.fromEntries(
+        CRUNZZO_REGIONS.map((region) => [
+          region.id,
+          getRegionalRemainingUnits(getAllocationForRegion(region.id, product.id)),
+        ])
+      ),
+    }));
+    const syncKey = JSON.stringify(
+      projections.map(({ product, regionalStock }) => [product.id, regionalStock])
+    );
+    if (regionalProjectionSyncKeyRef.current === syncKey) return;
+    regionalProjectionSyncKeyRef.current = syncKey;
+
+    const pendingUpdates = projections.filter(({ product, regionalStock }) =>
+      CRUNZZO_REGIONS.some(
+        (region) => Number(product.regionalStock?.[region.id] || 0) !== regionalStock[region.id]
+      )
+    );
+    if (!pendingUpdates.length) return;
+
+    Promise.all(
+      pendingUpdates.map(({ product, regionalStock }) =>
+        updateDoc(doc(db, "products", product.id), {
+          regionalStock,
+          regionalStockUpdatedAtMs: Date.now(),
+        })
+      )
+    ).catch((error) => {
+      regionalProjectionSyncKeyRef.current = "";
+      console.error("Regional stock projection sync failed:", error);
+    });
+  }, [loadedAllocationRegions, products, regionalAllocations, userProfile]);
+
+  const getAllocationDraftValue = (regionId, productId) => {
+    const key = `${productId}_${regionId}`;
+    if (Object.prototype.hasOwnProperty.call(allocationDrafts, key)) {
+      return allocationDrafts[key];
+    }
+    return String(getAllocationForRegion(regionId, productId)?.allocatedUnits || 0);
+  };
+
+  const filteredAllocationProducts = useMemo(() => {
+    let filtered = products;
+    if (allocationCategoryFilter !== "All") {
+      filtered = filtered.filter((p) => p.category === allocationCategoryFilter);
+    }
+    if (allocationSearch.trim()) {
+      const term = allocationSearch.toLowerCase();
+      filtered = filtered.filter(
+        (p) =>
+          (p.name || "").toLowerCase().includes(term) ||
+          (p.skuCode || "").toLowerCase().includes(term)
+      );
+    }
+    return filtered;
+  }, [products, allocationSearch, allocationCategoryFilter]);
+
+  const handleAllocationDraft = (productId, regionId, value) => {
+    setAllocationMessage("");
+    setAllocationErrorModal(null);
+    setAllocationDrafts((previous) => ({
+      ...previous,
+      [`${productId}_${regionId}`]: sanitizeNumber(value),
+    }));
+  };
+
+  const saveRegionalAllocation = async (product) => {
+    const proposedAllocations = CRUNZZO_REGIONS.map((region) => {
+      const current = getAllocationForRegion(region.id, product.id) || {};
+      return {
+        region,
+        allocatedUnits: Number(getAllocationDraftValue(region.id, product.id) || 0),
+        fulfilledUnits: Number(current.fulfilledUnits || 0),
+      };
+    });
+    const invalidAllocation = proposedAllocations.find(
+      (item) => !Number.isInteger(item.allocatedUnits) || item.allocatedUnits < 0
+    );
+    const belowFulfilled = proposedAllocations.find(
+      (item) => item.allocatedUnits < item.fulfilledUnits
+    );
+
+    if (invalidAllocation || belowFulfilled) {
+      const message = invalidAllocation
+        ? `${invalidAllocation.region.name} allocation must be a whole number.`
+        : `${belowFulfilled.region.name} allocation cannot be lower than ${belowFulfilled.fulfilledUnits} fulfilled units.`;
+      setAllocationErrorModal({
+        title: "Unable to Save Allocation",
+        message,
+        productName: product.name || "Selected product",
+      });
+      return;
+    }
+
+    const proposedRemainingTotal = proposedAllocations.reduce(
+      (sum, item) => sum + Math.max(0, item.allocatedUnits - item.fulfilledUnits),
+      0
+    );
+    const visibleCentralStock = Number(product.stock || 0);
+
+    if (proposedRemainingTotal > visibleCentralStock) {
+      setAllocationErrorModal({
+        title: "Allocation Exceeds Available Stock",
+        message: `Regional remaining allocations (${proposedRemainingTotal}) exceed central stock (${visibleCentralStock}).`,
+        productName: product.name || "Selected product",
+        totalRemainingAllocation: proposedRemainingTotal,
+        centralStock: visibleCentralStock,
+        excessUnits: proposedRemainingTotal - visibleCentralStock,
+      });
+      return;
+    }
+
+    try {
+      setSavingAllocationId(product.id);
+      setAllocationMessage("");
+      setAllocationErrorModal(null);
+
+      await runTransaction(db, async (transaction) => {
+        const productRef = doc(db, "products", product.id);
+        const allocationRefs = CRUNZZO_REGIONS.map((region) => ({
+          region,
+          ref: doc(
+            db,
+            "regional_inventory",
+            region.id,
+            "products",
+            getAllocationForRegion(region.id, product.id)?.id || product.id
+          ),
+        }));
+
+        const productSnapshot = await transaction.get(productRef);
+        const allocationSnapshots = [];
+        for (const entry of allocationRefs) {
+          allocationSnapshots.push(await transaction.get(entry.ref));
+        }
+
+        if (!productSnapshot.exists()) {
+          throw new Error("Product no longer exists.");
+        }
+
+        const centralStock = Number(productSnapshot.data().stock || 0);
+        const nextAllocations = allocationRefs.map((entry, index) => {
+          const current = allocationSnapshots[index].exists()
+            ? allocationSnapshots[index].data()
+            : {};
+          const allocatedUnits = Number(getAllocationDraftValue(entry.region.id, product.id) || 0);
+          const fulfilledUnits = Number(current.fulfilledUnits || 0);
+
+          if (!Number.isInteger(allocatedUnits) || allocatedUnits < 0) {
+            throw new Error(`${entry.region.name} allocation must be a whole number.`);
+          }
+          if (allocatedUnits < fulfilledUnits) {
+            throw new Error(
+              `${entry.region.name} allocation cannot be lower than ${fulfilledUnits} fulfilled units.`
+            );
+          }
+
+          return { ...entry, allocatedUnits, fulfilledUnits };
+        });
+
+        const totalRemainingAllocation = nextAllocations.reduce(
+          (sum, item) => sum + Math.max(0, item.allocatedUnits - item.fulfilledUnits),
+          0
+        );
+
+        if (totalRemainingAllocation > centralStock) {
+          const allocationError = new Error(
+            `Regional remaining allocations (${totalRemainingAllocation}) exceed central stock (${centralStock}).`
+          );
+          allocationError.code = "regional-allocation-exceeds-stock";
+          allocationError.details = {
+            totalRemainingAllocation,
+            centralStock,
+            excessUnits: totalRemainingAllocation - centralStock,
+          };
+          throw allocationError;
+        }
+
+        transaction.update(productRef, {
+          regionalStock: Object.fromEntries(
+            nextAllocations.map((item) => [
+              item.region.id,
+              Math.max(0, item.allocatedUnits - item.fulfilledUnits),
+            ])
+          ),
+          regionalStockUpdatedAtMs: Date.now(),
+        });
+
+        nextAllocations.forEach((item) => {
+          transaction.set(
+            item.ref,
+            {
+              productId: product.id,
+              productName: product.name || "",
+              skuCode: product.skuCode || "",
+              region: item.region.name,
+              allocatedUnits: item.allocatedUnits,
+              fulfilledUnits: item.fulfilledUnits,
+              updatedAt: serverTimestamp(),
+              updatedAtMs: Date.now(),
+            },
+            { merge: true }
+          );
+        });
+      });
+
+      setAllocationDrafts((previous) => {
+        const next = { ...previous };
+        CRUNZZO_REGIONS.forEach((region) => delete next[`${product.id}_${region.id}`]);
+        return next;
+      });
+      setAllocationMessage(`${product.name} regional allocation saved.`);
+    } catch (error) {
+      console.error("Regional allocation save failed:", error);
+      const stockMismatch = String(error.message || "").match(
+        /Regional remaining allocations \((\d+)\) exceed central stock \((\d+)\)/
+      );
+      const parsedDetails = stockMismatch
+        ? {
+            totalRemainingAllocation: Number(stockMismatch[1]),
+            centralStock: Number(stockMismatch[2]),
+            excessUnits: Number(stockMismatch[1]) - Number(stockMismatch[2]),
+          }
+        : {};
+      setAllocationErrorModal({
+        title: error.code === "regional-allocation-exceeds-stock" || stockMismatch
+          ? "Allocation Exceeds Available Stock"
+          : "Unable to Save Allocation",
+        message: error.message || "Failed to save regional allocation.",
+        productName: product.name || "Selected product",
+        ...parsedDetails,
+        ...(error.details || {}),
+      });
+    } finally {
+      setSavingAllocationId("");
+    }
+  };
+
   const handleProductInput = (e) => {
     const { name, value } = e.target;
     let finalValue = value;
 
+    const lowerName = name.toLowerCase();
     if (
-      name.includes("Rate") ||
-      name.includes("Stock") ||
-      name.includes("Gst") ||
-      name.includes("LowStockThreshold")
+      lowerName.includes("rate") ||
+      lowerName.includes("stock") ||
+      lowerName.includes("gst") ||
+      lowerName.includes("size") ||
+      lowerName.includes("lowstockthreshold")
     ) {
       finalValue = sanitizeNumber(value);
     }
@@ -531,16 +975,15 @@ export default function CrunzzoAdminDashboard() {
       skuCode: "",
       category: "Chips",
       zones: [],
+      stock: "0",
+      gst: "18",
+      lowStockThreshold: "20",
+      pack12Size: "12",
       pack12PricingGroup: "Standard Retail",
       pack12Rate: "",
-      pack12Stock: "0",
-      pack12Gst: "18",
-      pack12LowStockThreshold: "20",
+      pack240Size: "240",
       pack240PricingGroup: "Standard Retail",
       pack240Rate: "",
-      pack240Stock: "0",
-      pack240Gst: "18",
-      pack240LowStockThreshold: "2",
     });
     setImageFile(null);
     setImagePreview("");
@@ -592,7 +1035,7 @@ export default function CrunzzoAdminDashboard() {
         unitLabel: "Packs",
         stock: totalStockUnits,
         openingStock: totalStockUnits,
-        lowStockThreshold: Math.min(...packOptions.map((pack) => Number(pack.lowStockThreshold || 0))),
+        lowStockThreshold: Number(productForm.lowStockThreshold || 0),
         category: productForm.category,
         zones: productForm.zones,
         packSellingMode: "fixed-packs",
@@ -625,19 +1068,24 @@ export default function CrunzzoAdminDashboard() {
   };
 
   const startProductEdit = (product) => {
+    const totalUnits = getCrunzzoTotalUnits(product);
     const packOptions = normalizeCrunzzoPackOptions(product);
+    const firstPack = packOptions[0] || {};
     const packForm = packOptions.reduce((acc, pack) => {
-      acc[`${pack.id}Rate`] = String(pack.rate || "");
+      acc[`${pack.id}Size`] = String(pack.packSize || "");
+      acc[`${pack.id}Rate`] = pack.rate ? String(pack.rate) : "";
       acc[`${pack.id}PricingGroup`] = pack.pricingGroup || product.pricingGroup || "Standard Retail";
-      acc[`${pack.id}Stock`] = String(pack.stock || 0);
-      acc[`${pack.id}Gst`] = String(pack.gst || 18);
-      acc[`${pack.id}LowStockThreshold`] = String(pack.lowStockThreshold || 0);
       return acc;
     }, {});
 
     setEditingProductId(product.id);
     setEditingProductForm({
       name: product.name || "",
+      category: product.category || "Chips",
+      skuCode: product.skuCode || "",
+      stock: totalUnits ? String(totalUnits) : "",
+      gst: firstPack.gst ? String(firstPack.gst) : "",
+      lowStockThreshold: product.lowStockThreshold ? String(product.lowStockThreshold) : "",
       ...packForm,
     });
   };
@@ -649,11 +1097,13 @@ export default function CrunzzoAdminDashboard() {
 
   const handleProductEditInput = (event) => {
     const { name, value } = event.target;
+    const lowerName = name.toLowerCase();
     const isNumericPackField =
-      name.includes("Rate") ||
-      name.includes("Stock") ||
-      name.includes("Gst") ||
-      name.includes("LowStockThreshold");
+      lowerName.includes("rate") ||
+      lowerName.includes("stock") ||
+      lowerName.includes("gst") ||
+      lowerName.includes("size") ||
+      lowerName.includes("lowstockthreshold");
 
     setEditingProductForm((prev) => ({
       ...prev,
@@ -662,7 +1112,7 @@ export default function CrunzzoAdminDashboard() {
   };
 
   const handleSaveProductEdit = async (product) => {
-    const nextName = editingProductForm.name.trim();
+    const nextName = (editingProductForm.name || "").trim();
     const packOptions = buildCrunzzoPackOptionsFromForm(editingProductForm);
     const invalidPack = packOptions.find((pack) => Number(pack.rate || 0) <= 0);
 
@@ -678,26 +1128,30 @@ export default function CrunzzoAdminDashboard() {
 
     try {
       setSavingProductEdit(true);
-      const totalStockUnits = getCrunzzoTotalUnits(packOptions);
+      const totalStockUnits = toNumber(editingProductForm.stock, 0);
       const primaryPack = packOptions[0];
 
-      await updateDoc(doc(db, "products", product.id), {
+      const updatePayload = {
         name: nextName,
+        category: editingProductForm.category || "Chips",
+        skuCode: editingProductForm.skuCode || "",
         rate: primaryPack.rate,
         price: primaryPack.rate,
         pricingGroup: primaryPack.pricingGroup,
         gst: primaryPack.gst,
         unitLabel: "Packs",
         stock: totalStockUnits,
-        lowStockThreshold: Math.min(...packOptions.map((pack) => Number(pack.lowStockThreshold || 0))),
+        lowStockThreshold: Number(editingProductForm.lowStockThreshold || 0),
         packSellingMode: "fixed-packs",
         packOptions,
         updatedAtMs: Date.now(),
-      });
+      };
+
+      await updateDoc(doc(db, "products", product.id), updatePayload);
       cancelProductEdit();
     } catch (error) {
-      console.error("Product edit failed:", error);
-      alert("Failed to update product.");
+      console.error("Product update failed. Payload:", error);
+      alert(`Update Failed: ${error.code || "Error"}. ${error.message}`);
     } finally {
       setSavingProductEdit(false);
     }
@@ -780,12 +1234,21 @@ export default function CrunzzoAdminDashboard() {
         @media (max-width: 480px) {
           .admin-page-wrapper {
             padding: 0 !important;
+            height: 100dvh !important;
+            min-height: 100dvh !important;
           }
           .admin-shell-wrapper {
             max-width: none !important;
-            min-height: 100vh !important;
+            height: 100dvh !important;
+            min-height: 100dvh !important;
             border: none !important;
             box-shadow: none !important;
+          }
+          .admin-content-area {
+            padding-bottom: 20px !important;
+          }
+          .admin-footer-bar {
+            padding-bottom: calc(8px + env(safe-area-inset-bottom)) !important;
           }
         }
       `}</style>
@@ -807,6 +1270,7 @@ export default function CrunzzoAdminDashboard() {
         }}
       >
         <div
+          className="admin-content-area"
           style={{
             flex: 1,
             overflowY: "auto",
@@ -934,7 +1398,7 @@ export default function CrunzzoAdminDashboard() {
                   subtitle={`${orders.length} closed sales`}
                 />
                 <StatCard
-                  title="Revenue Units"
+                  title="Stock Available"
                   value={products.reduce((s, p) => s + getCrunzzoTotalUnits(p), 0)}
                   subtitle="Current stock count"
                 />
@@ -995,7 +1459,10 @@ export default function CrunzzoAdminDashboard() {
                     >
                       <div
                         style={{
-                          width: topSku.units ? "78%" : "12%",
+                          width: `${Math.min(
+                            100,
+                            Math.max(8, totalUnitsSold ? (topSku.units / totalUnitsSold) * 100 : 0)
+                          )}%`,
                           height: "100%",
                           background: BRAND,
                         }}
@@ -1035,7 +1502,9 @@ export default function CrunzzoAdminDashboard() {
                           color: TEXT,
                         }}
                       >
-                        <span>{item.name.toUpperCase()}</span>
+                        <span style={{ textTransform: "uppercase" }}>
+                          {formatPincodeLabel(item.name, pincodeCityLookup, item.city)}
+                        </span>
                         <span>{formatCompact(item.value)}</span>
                       </div>
                       <div
@@ -1068,51 +1537,66 @@ export default function CrunzzoAdminDashboard() {
                 </div>
 
                 <div style={{ display: "grid", gap: 10 }}>
-                  {products.slice(0, 3).map((item, index) => (
-                    <div
-                      key={item.id}
-                      style={{
-                        display: "grid",
-                        gridTemplateColumns: "38px 1fr auto",
-                        gap: 12,
-                        alignItems: "center",
-                        border: `1px solid ${BORDER}`,
-                        borderRadius: 14,
-                        padding: 10,
-                      }}
-                    >
+                  {skuStats.length ? (
+                    skuStats.slice(0, 3).map((item, index) => (
                       <div
+                        key={item.productId || item.name}
                         style={{
-                          width: 38,
-                          height: 38,
-                          borderRadius: 12,
-                          background: "#f7f8fb",
                           display: "grid",
-                          placeItems: "center",
-                          color: BRAND,
-                          fontWeight: 800,
+                          gridTemplateColumns: "38px 1fr auto",
+                          gap: 12,
+                          alignItems: "center",
+                          border: `1px solid ${BORDER}`,
+                          borderRadius: 14,
+                          padding: 10,
                         }}
                       >
-                        #{index + 1}
-                      </div>
+                        <div
+                          style={{
+                            width: 38,
+                            height: 38,
+                            borderRadius: 12,
+                            background: "#f7f8fb",
+                            display: "grid",
+                            placeItems: "center",
+                            color: BRAND,
+                            fontWeight: 800,
+                          }}
+                        >
+                          #{index + 1}
+                        </div>
 
-                      <div>
-                        <div style={{ fontSize: 13, fontWeight: 700, color: TEXT }}>{item.name}</div>
-                        <div style={{ fontSize: 11, color: MUTED }}>
-                          Category: {item.category || "Snacks"}
+                        <div>
+                          <div style={{ fontSize: 13, fontWeight: 700, color: TEXT }}>{item.name}</div>
+                          <div style={{ fontSize: 11, color: MUTED }}>
+                            Category: {item.category || "Snacks"}
+                          </div>
                         </div>
-                      </div>
 
-                      <div style={{ textAlign: "right" }}>
-                        <div style={{ fontSize: 13, fontWeight: 800, color: TEXT }}>
-                          {getCrunzzoTotalUnits(item)} Units
-                        </div>
-                        <div style={{ fontSize: 11, color: BRAND }}>
-                          {formatCompact(getCrunzzoInventoryValue(item))} Total
+                        <div style={{ textAlign: "right" }}>
+                          <div style={{ fontSize: 13, fontWeight: 800, color: TEXT }}>
+                            {item.units} Units
+                          </div>
+                          <div style={{ fontSize: 11, color: BRAND }}>
+                            {formatCompact(item.salesValue)} Total
+                          </div>
                         </div>
                       </div>
+                    ))
+                  ) : (
+                    <div
+                      style={{
+                        border: `1px solid ${BORDER}`,
+                        borderRadius: 14,
+                        padding: 14,
+                        color: MUTED,
+                        fontSize: 13,
+                        textAlign: "center",
+                      }}
+                    >
+                      No SKU sales yet.
                     </div>
-                  ))}
+                  )}
                 </div>
               </SectionCard>
             </>
@@ -1228,6 +1712,176 @@ export default function CrunzzoAdminDashboard() {
             </>
           )}
 
+          {activeTab === "regions" && (
+            <>
+              <div style={{ marginBottom: 16 }}>
+                <h1 style={{ margin: 0, fontSize: 16, fontWeight: 800, color: TEXT }}>
+                  Regional Inventory Allocation
+                </h1>
+                <p style={{ margin: "4px 0 0", fontSize: 12, color: MUTED }}>
+                  Allocate central Crunzzo units across Chennai, Mumbai, and Delhi.
+                </p>
+              </div>
+
+              <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 10, marginBottom: 14 }}>
+                <input
+                  placeholder="Search products for allocation..."
+                  value={allocationSearch}
+                  onChange={(e) => setAllocationSearch(e.target.value)}
+                  style={{
+                    width: "100%",
+                    height: 42,
+                    borderRadius: 12,
+                    border: `1px solid ${BORDER}`,
+                    padding: "0 14px",
+                    fontSize: 13,
+                    fontWeight: 600,
+                    boxSizing: "border-box",
+                    outline: "none"
+                  }}
+                />
+                <select
+                  value={allocationCategoryFilter}
+                  onChange={(e) => setAllocationCategoryFilter(e.target.value)}
+                  style={{
+                    height: 42,
+                    borderRadius: 12,
+                    border: `1px solid ${BORDER}`,
+                    padding: "0 10px",
+                    fontSize: 13,
+                    fontWeight: 800,
+                    background: "#fff",
+                    color: TEXT,
+                    outline: "none",
+                    minWidth: 100
+                  }}
+                >
+                  <option value="All">All Categories</option>
+                  {[...new Set(products.map(p => p.category).filter(Boolean))].sort().map(cat => (
+                    <option key={cat} value={cat}>{cat}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div style={{ margin: "-4px 2px 12px", color: MUTED, fontSize: 11, fontWeight: 700 }}>
+                {filteredAllocationProducts.length} product{filteredAllocationProducts.length === 1 ? "" : "s"} shown. Select a product to manage its allocation.
+              </div>
+
+              {allocationMessage ? (
+                <div
+                  style={{
+                    marginBottom: 14,
+                    borderRadius: 12,
+                    padding: "10px 12px",
+                    border: `1px solid ${allocationMessage.includes("saved") ? "#d7f0dc" : "#ffd1d1"}`,
+                    background: allocationMessage.includes("saved") ? "#eef9f0" : "#fff0f0",
+                    color: allocationMessage.includes("saved") ? "#16803a" : "#d42424",
+                    fontSize: 12,
+                    fontWeight: 800,
+                  }}
+                >
+                  {allocationMessage}
+                </div>
+              ) : null}
+
+              <div style={{ display: "grid", gap: 13 }}>
+                {filteredAllocationProducts.length ? filteredAllocationProducts.map((product) => {
+                  const totalRemainingAllocated = CRUNZZO_REGIONS.reduce(
+                    (sum, region) => sum + getRegionalRemainingUnits(getAllocationForRegion(region.id, product.id)),
+                    0
+                  );
+                  const unallocated = Math.max(0, Number(product.stock || 0) - totalRemainingAllocated);
+                  const isExpanded = expandedAllocationProductId === product.id;
+
+                  return (
+                    <SectionCard key={product.id} style={{ padding: 0, overflow: "hidden" }}>
+                      <button
+                        type="button"
+                        className={`crz-allocation-accordion-trigger${isExpanded ? " is-open" : ""}`}
+                        aria-expanded={isExpanded}
+                        aria-controls={`allocation-panel-${product.id}`}
+                        onClick={() => {
+                          setAllocationMessage("");
+                          setExpandedAllocationProductId((current) => current === product.id ? null : product.id);
+                        }}
+                      >
+                        <strong style={{ minWidth: 0, fontSize: 14, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                          {product.name}
+                        </strong>
+                        <span className="crz-allocation-chevron" aria-hidden="true">
+                          <svg viewBox="0 0 24 24">
+                            <path d="m6 9 6 6 6-6" />
+                          </svg>
+                        </span>
+                      </button>
+
+                      <div
+                        id={`allocation-panel-${product.id}`}
+                        className={`crz-allocation-panel${isExpanded ? " is-open" : ""}`}
+                        aria-hidden={!isExpanded}
+                      >
+                        <div className="crz-allocation-panel-inner">
+                          <div className="crz-allocation-panel-content">
+                          <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start", paddingTop: 13 }}>
+                            <div style={{ color: MUTED, fontSize: 11 }}>{product.skuCode || product.category || "Crunzzo product"}</div>
+                            <div style={{ textAlign: "right" }}>
+                              <div style={{ color: BRAND, fontSize: 17, fontWeight: 900 }}>{Number(product.stock || 0)} units</div>
+                              <div style={{ color: MUTED, fontSize: 10 }}>central stock</div>
+                            </div>
+                          </div>
+
+                          <div style={{ marginTop: 12, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                            <div style={{ padding: 10, borderRadius: 11, background: "#fafafa" }}>
+                              <div style={{ color: MUTED, fontSize: 10, fontWeight: 800 }}>REGIONAL REMAINING</div>
+                              <strong style={{ display: "block", marginTop: 5 }}>{totalRemainingAllocated} units</strong>
+                            </div>
+                            <div style={{ padding: 10, borderRadius: 11, background: "#fff3f3" }}>
+                              <div style={{ color: MUTED, fontSize: 10, fontWeight: 800 }}>UNALLOCATED</div>
+                              <strong style={{ display: "block", marginTop: 5, color: BRAND }}>{unallocated} units</strong>
+                            </div>
+                          </div>
+
+                          <div style={{ display: "grid", gap: 10, marginTop: 13 }}>
+                            {CRUNZZO_REGIONS.map((region) => {
+                              const allocation = getAllocationForRegion(region.id, product.id);
+                              const fulfilled = Number(allocation?.fulfilledUnits || 0);
+                              const remaining = getRegionalRemainingUnits(allocation);
+                              return (
+                                <div key={region.id} style={{ display: "grid", gridTemplateColumns: "88px minmax(0, 1fr)", gap: 10, alignItems: "center" }}>
+                                  <div>
+                                    <strong style={{ fontSize: 12 }}>{region.name}</strong>
+                                    <small style={{ display: "block", color: MUTED, marginTop: 3 }}>{fulfilled} fulfilled / {remaining} remaining</small>
+                                  </div>
+                                  <input
+                                    value={getAllocationDraftValue(region.id, product.id)}
+                                    onChange={(event) => handleAllocationDraft(product.id, region.id, event.target.value)}
+                                    inputMode="numeric"
+                                    aria-label={`${region.name} allocation for ${product.name}`}
+                                    style={{ width: "100%", height: 42, border: `1px solid ${BORDER}`, borderRadius: 11, padding: "0 12px", fontWeight: 800, boxSizing: "border-box" }}
+                                  />
+                                </div>
+                              );
+                            })}
+                          </div>
+
+                          <button
+                            type="button"
+                            onClick={() => saveRegionalAllocation(product)}
+                            disabled={savingAllocationId === product.id}
+                            style={{ marginTop: 14, width: "100%", height: 42, border: "none", borderRadius: 11, background: BRAND, color: "#fff", fontWeight: 900, cursor: "pointer", opacity: savingAllocationId === product.id ? 0.6 : 1 }}
+                          >
+                            {savingAllocationId === product.id ? "Saving..." : "Save Regional Allocation"}
+                          </button>
+                          </div>
+                        </div>
+                      </div>
+                    </SectionCard>
+                  );
+                }) : <SectionCard><div style={{ textAlign: "center", color: MUTED }}>Add products before allocating regional inventory.</div></SectionCard>}
+              </div>
+            </>
+          )}
+
           {activeTab === "products" && (
             <>
               <div style={{ marginBottom: 12 }}>
@@ -1335,6 +1989,72 @@ export default function CrunzzoAdminDashboard() {
                     />
                   </label>
 
+                        <div
+                          style={{
+                            display: "grid",
+                            gridTemplateColumns: "repeat(3, 1fr)",
+                            gap: 10,
+                          }}
+                        >
+                          <label style={{ display: "grid", gap: 6 }}>
+                            <span style={PRODUCT_LABEL_STYLE}>QUANTITY</span>
+                            <input
+                              name="stock"
+                              value={productForm.stock}
+                              onChange={handleProductInput}
+                              placeholder="0"
+                              inputMode="numeric"
+                              style={{
+                                ...PRODUCT_FIELD_TEXT_STYLE,
+                                height: 48,
+                                borderRadius: 12,
+                                border: `1px solid ${BORDER}`,
+                                padding: "0 14px",
+                                outline: "none",
+                                background: "#fff",
+                              }}
+                            />
+                          </label>
+                          <label style={{ display: "grid", gap: 6 }}>
+                            <span style={PRODUCT_LABEL_STYLE}>GST (%)</span>
+                            <input
+                              name="gst"
+                              value={productForm.gst}
+                              onChange={handleProductInput}
+                              placeholder="18"
+                              inputMode="numeric"
+                              style={{
+                                ...PRODUCT_FIELD_TEXT_STYLE,
+                                height: 48,
+                                borderRadius: 12,
+                                border: `1px solid ${BORDER}`,
+                                padding: "0 14px",
+                                outline: "none",
+                                background: "#fff",
+                              }}
+                            />
+                          </label>
+                          <label style={{ display: "grid", gap: 6 }}>
+                            <span style={PRODUCT_LABEL_STYLE}>LOW STOCK</span>
+                            <input
+                              name="lowStockThreshold"
+                              value={productForm.lowStockThreshold}
+                              onChange={handleProductInput}
+                              placeholder="20"
+                              inputMode="numeric"
+                              style={{
+                                ...PRODUCT_FIELD_TEXT_STYLE,
+                                height: 48,
+                                borderRadius: 12,
+                                border: `1px solid ${BORDER}`,
+                                padding: "0 14px",
+                                outline: "none",
+                                background: "#fff",
+                              }}
+                            />
+                          </label>
+                        </div>
+
                   <div style={{ display: "grid", gap: 10 }}>
                     <span style={PRODUCT_LABEL_STYLE}>PACK PRICING & STOCK</span>
                     {CRUNZZO_PACKS.map((pack) => (
@@ -1350,7 +2070,7 @@ export default function CrunzzoAdminDashboard() {
                         }}
                       >
                         <div style={{ fontSize: 14, fontWeight: 900, color: TEXT }}>
-                          {pack.label}
+                          Pack of {productForm[`${pack.id}Size`] || pack.packSize}
                         </div>
                         <label style={{ display: "grid", gap: 6 }}>
                           <span style={PRODUCT_LABEL_STYLE}>PRICING GROUP</span>
@@ -1383,69 +2103,31 @@ export default function CrunzzoAdminDashboard() {
                           }}
                         >
                           <label style={{ display: "grid", gap: 6 }}>
+                            <span style={PRODUCT_LABEL_STYLE}>SIZE (UNITS)</span>
+                            <input
+                              name={`${pack.id}Size`}
+                              value={productForm[`${pack.id}Size`]}
+                              onChange={handleProductInput}
+                              placeholder={String(pack.packSize)}
+                              inputMode="numeric"
+                              style={{
+                                ...PRODUCT_FIELD_TEXT_STYLE,
+                                height: 44,
+                                borderRadius: 12,
+                                border: `1px solid ${BORDER}`,
+                                padding: "0 12px",
+                                outline: "none",
+                                background: "#fff",
+                              }}
+                            />
+                          </label>
+                          <label style={{ display: "grid", gap: 6 }}>
                             <span style={PRODUCT_LABEL_STYLE}>PRICE (₹)</span>
                             <input
                               name={`${pack.id}Rate`}
                               value={productForm[`${pack.id}Rate`]}
                               onChange={handleProductInput}
                               placeholder="0"
-                              inputMode="numeric"
-                              style={{
-                                ...PRODUCT_FIELD_TEXT_STYLE,
-                                height: 44,
-                                borderRadius: 12,
-                                border: `1px solid ${BORDER}`,
-                                padding: "0 12px",
-                                outline: "none",
-                                background: "#fff",
-                              }}
-                            />
-                          </label>
-                          <label style={{ display: "grid", gap: 6 }}>
-                            <span style={PRODUCT_LABEL_STYLE}>QUANTITY</span>
-                            <input
-                              name={`${pack.id}Stock`}
-                              value={productForm[`${pack.id}Stock`]}
-                              onChange={handleProductInput}
-                              placeholder="0"
-                              inputMode="numeric"
-                              style={{
-                                ...PRODUCT_FIELD_TEXT_STYLE,
-                                height: 44,
-                                borderRadius: 12,
-                                border: `1px solid ${BORDER}`,
-                                padding: "0 12px",
-                                outline: "none",
-                                background: "#fff",
-                              }}
-                            />
-                          </label>
-                          <label style={{ display: "grid", gap: 6 }}>
-                            <span style={PRODUCT_LABEL_STYLE}>GST (%)</span>
-                            <input
-                              name={`${pack.id}Gst`}
-                              value={productForm[`${pack.id}Gst`]}
-                              onChange={handleProductInput}
-                              placeholder="18"
-                              inputMode="numeric"
-                              style={{
-                                ...PRODUCT_FIELD_TEXT_STYLE,
-                                height: 44,
-                                borderRadius: 12,
-                                border: `1px solid ${BORDER}`,
-                                padding: "0 12px",
-                                outline: "none",
-                                background: "#fff",
-                              }}
-                            />
-                          </label>
-                          <label style={{ display: "grid", gap: 6 }}>
-                            <span style={PRODUCT_LABEL_STYLE}>LOW STOCK</span>
-                            <input
-                              name={`${pack.id}LowStockThreshold`}
-                              value={productForm[`${pack.id}LowStockThreshold`]}
-                              onChange={handleProductInput}
-                              placeholder={String(pack.defaultLowStockThreshold)}
                               inputMode="numeric"
                               style={{
                                 ...PRODUCT_FIELD_TEXT_STYLE,
@@ -1849,7 +2531,7 @@ export default function CrunzzoAdminDashboard() {
                 {filteredInventory.length ? (
                   filteredInventory.map((item) => {
                     const packOptions = normalizeCrunzzoPackOptions(item);
-                    const totalUnits = getCrunzzoTotalUnits(packOptions);
+                    const totalUnits = getCrunzzoTotalUnits(item);
                     const lowStock = isCrunzzoLowStock(item);
                     const isEditing = editingProductId === item.id;
 
@@ -1972,6 +2654,29 @@ export default function CrunzzoAdminDashboard() {
                               gap: 12,
                             }}
                           >
+                            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 2 }}>
+                              <div style={{ fontSize: 11, fontWeight: 900, color: BRAND, letterSpacing: 0.5 }}>EDITING MODE</div>
+                              <button
+                                type="button"
+                                onClick={() => handleSaveProductEdit(item)}
+                                disabled={savingProductEdit}
+                                style={{
+                                  height: 28,
+                                  padding: "0 16px",
+                                  borderRadius: 999,
+                                  border: "none",
+                                  background: BRAND,
+                                  color: "#fff",
+                                  fontSize: 10,
+                                  fontWeight: 900,
+                                  cursor: savingProductEdit ? "not-allowed" : "pointer",
+                                  boxShadow: "0 2px 8px rgba(229, 31, 40, 0.25)"
+                                }}
+                              >
+                                {savingProductEdit ? "SAVING..." : "SAVE CHANGES"}
+                              </button>
+                            </div>
+
                             <label style={{ display: "grid", gap: 6, color: TEXT, fontSize: 12, fontWeight: 900 }}>
                               Product Name
                               <input
@@ -1992,6 +2697,117 @@ export default function CrunzzoAdminDashboard() {
                               />
                             </label>
 
+                            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                              <label style={{ display: "grid", gap: 5, fontSize: 11, fontWeight: 800, color: TEXT }}>
+                                Category
+                                <select
+                                  name="category"
+                                  value={editingProductForm.category || ""}
+                                  onChange={handleProductEditInput}
+                                  style={{
+                                    height: 38,
+                                    borderRadius: 10,
+                                    border: `1px solid ${BORDER}`,
+                                    padding: "0 10px",
+                                    outline: "none",
+                                    background: "#fff",
+                                    fontWeight: 700,
+                                  }}
+                                >
+                                  {CATEGORY_OPTIONS.map((cat) => (
+                                    <option key={cat} value={cat}>
+                                      {cat}
+                                    </option>
+                                  ))}
+                                </select>
+                              </label>
+                              <label style={{ display: "grid", gap: 5, fontSize: 11, fontWeight: 800, color: TEXT }}>
+                                SKU Code
+                                <input
+                                  name="skuCode"
+                                  value={editingProductForm.skuCode || ""}
+                                  onChange={handleProductEditInput}
+                                  placeholder="SKU"
+                                  style={{
+                                    height: 38,
+                                    borderRadius: 10,
+                                    border: `1px solid ${BORDER}`,
+                                    padding: "0 10px",
+                                    outline: "none",
+                                    background: "#fff",
+                                    fontWeight: 700,
+                                  }}
+                                />
+                              </label>
+                            </div>
+
+                            <div
+                              style={{
+                                display: "grid",
+                                gridTemplateColumns: "repeat(3, 1fr)",
+                                gap: 8,
+                                marginBottom: 4,
+                              }}
+                            >
+                              <label style={{ display: "grid", gap: 5, fontSize: 11, fontWeight: 800, color: TEXT }}>
+                                Stock
+                                <input
+                                  name="stock"
+                                  value={editingProductForm.stock ?? ""}
+                                  onChange={handleProductEditInput}
+                                  placeholder="0"
+                                  inputMode="numeric"
+                                  style={{
+                                    height: 38,
+                                    borderRadius: 10,
+                                    border: `1px solid ${BORDER}`,
+                                    padding: "0 10px",
+                                    outline: "none",
+                                    background: "#fff",
+                                    fontWeight: 700,
+                                  }}
+                                />
+                              </label>
+                              <label style={{ display: "grid", gap: 5, fontSize: 11, fontWeight: 800, color: TEXT }}>
+                                GST %
+                                <input
+                                  name="gst"
+                                  value={editingProductForm.gst ?? ""}
+                                  onChange={handleProductEditInput}
+                                  placeholder="18"
+                                  inputMode="numeric"
+                                  style={{
+                                    height: 38,
+                                    borderRadius: 10,
+                                    border: `1px solid ${BORDER}`,
+                                    padding: "0 10px",
+                                    outline: "none",
+                                    background: "#fff",
+                                    fontWeight: 700,
+                                  }}
+                                />
+                              </label>
+                              <label style={{ display: "grid", gap: 5, fontSize: 11, fontWeight: 800, color: TEXT }}>
+                                Low Stock
+                                <input
+                                  name="lowStockThreshold"
+                                  value={editingProductForm.lowStockThreshold ?? ""}
+                                  onChange={handleProductEditInput}
+                                  placeholder="0"
+                                  inputMode="numeric"
+                                  style={{
+                                    height: 38,
+                                    borderRadius: 10,
+                                    border: `1px solid ${BORDER}`,
+                                    padding: "0 10px",
+                                    outline: "none",
+                                    background: "#fff",
+                                    fontWeight: 700,
+                                  }}
+                                />
+                              </label>
+                            </div>
+
                             {CRUNZZO_PACKS.map((pack) => (
                               <div
                                 key={pack.id}
@@ -1999,13 +2815,13 @@ export default function CrunzzoAdminDashboard() {
                                   border: `1px solid ${BORDER}`,
                                   borderRadius: 12,
                                   padding: 10,
-                                  background: "#fff",
+                                  background: "#fdfdfd",
                                   display: "grid",
                                   gap: 10,
                                 }}
                               >
-                                <div style={{ fontSize: 12, fontWeight: 900, color: TEXT }}>
-                                  {pack.label}
+                                <div style={{ fontSize: 13, fontWeight: 900, color: TEXT }}>
+                                  Pack Settings ({editingProductForm[`${pack.id}Size`] || pack.packSize} units)
                                 </div>
                                 <label style={{ display: "grid", gap: 5, fontSize: 11, fontWeight: 800, color: TEXT }}>
                                   Pricing Group
@@ -2033,15 +2849,13 @@ export default function CrunzzoAdminDashboard() {
                                 <div
                                   style={{
                                     display: "grid",
-                                    gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)",
-                                    gap: 8,
+                                    gridTemplateColumns: "1fr 1fr",
+                                    gap: 12,
                                   }}
                                 >
                                   {[
+                                    ["Size", "Pack Size"],
                                     ["Rate", "Price"],
-                                    ["Stock", "Qty"],
-                                    ["Gst", "GST %"],
-                                    ["LowStockThreshold", "Low"],
                                   ].map(([suffix, label]) => (
                                     <label key={suffix} style={{ display: "grid", gap: 5, fontSize: 11, fontWeight: 800, color: TEXT }}>
                                       {label}
@@ -2066,41 +2880,47 @@ export default function CrunzzoAdminDashboard() {
                               </div>
                             ))}
 
-                            <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, flexWrap: "wrap" }}>
-                              <button
-                                type="button"
-                                onClick={cancelProductEdit}
-                                disabled={savingProductEdit}
-                                style={{
-                                  height: 34,
-                                  padding: "0 12px",
-                                  borderRadius: 999,
-                                  border: `1px solid ${BORDER}`,
-                                  background: "#fff",
-                                  color: MUTED,
-                                  fontWeight: 800,
-                                  cursor: savingProductEdit ? "not-allowed" : "pointer",
-                                }}
-                              >
-                                Cancel
-                              </button>
+                            <div style={{
+                              display: "flex",
+                              justifyContent: "flex-end",
+                              gap: 6,
+                              marginTop: 10,
+                            }}>
                               <button
                                 type="button"
                                 onClick={() => handleSaveProductEdit(item)}
                                 disabled={savingProductEdit}
                                 style={{
-                                  height: 34,
-                                  padding: "0 14px",
+                                  height: 30,
+                                  padding: "0 15px",
                                   borderRadius: 999,
                                   border: "none",
                                   background: BRAND,
                                   color: "#fff",
-                                  fontWeight: 900,
+                                  fontSize: 11,
+                                  fontWeight: 800,
                                   cursor: savingProductEdit ? "not-allowed" : "pointer",
-                                  opacity: savingProductEdit ? 0.7 : 1,
                                 }}
                               >
                                 {savingProductEdit ? "Saving..." : "Save"}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={cancelProductEdit}
+                                disabled={savingProductEdit}
+                                style={{
+                                  height: 30,
+                                  padding: "0 12px",
+                                  borderRadius: 999,
+                                  border: `1px solid ${BORDER}`,
+                                  background: "#fff",
+                                  color: MUTED,
+                                  fontSize: 11,
+                                  fontWeight: 700,
+                                  cursor: savingProductEdit ? "not-allowed" : "pointer",
+                                }}
+                              >
+                                Cancel
                               </button>
                             </div>
                           </div>
@@ -2126,19 +2946,19 @@ export default function CrunzzoAdminDashboard() {
                           >
                             <button
                               type="button"
-                              onClick={() => startProductEdit(item)}
+                              onClick={isEditing ? () => handleSaveProductEdit(item) : () => startProductEdit(item)}
                               style={{
                                 height: 34,
-                                padding: "0 12px",
+                                padding: "0 16px",
                                 borderRadius: 999,
                                 border: `1px solid ${isEditing ? BRAND : BORDER}`,
-                                background: isEditing ? "#fdeeee" : "#fff",
-                                color: isEditing ? BRAND : TEXT,
-                                fontWeight: 700,
+                                background: isEditing ? BRAND : "#fff",
+                                color: isEditing ? "#fff" : TEXT,
+                                fontWeight: 800,
                                 cursor: "pointer",
                               }}
                             >
-                              {isEditing ? "Editing" : "Edit"}
+                              {isEditing ? "Save Changes" : "Edit"}
                             </button>
 
                             <button
@@ -2192,6 +3012,7 @@ export default function CrunzzoAdminDashboard() {
         </div>
 
         <div
+          className="admin-footer-bar"
           style={{
             flexShrink: 0,
             background: "#fff",
@@ -2207,6 +3028,7 @@ export default function CrunzzoAdminDashboard() {
               border: `1px solid ${BORDER}`,
               borderRadius: 16,
               padding: 4,
+              overflow: "hidden",
             }}
           >
             <AdminTab
@@ -2218,6 +3040,11 @@ export default function CrunzzoAdminDashboard() {
               label="Sales"
               active={activeTab === "sales"}
               onClick={() => goToTab("sales")}
+            />
+            <AdminTab
+              label="Regions"
+              active={activeTab === "regions"}
+              onClick={() => goToTab("regions")}
             />
             <AdminTab
               label="Products"
@@ -2244,6 +3071,52 @@ export default function CrunzzoAdminDashboard() {
         onClose={closeCategoryModal}
         onSubmit={submitNewCategory}
       />
+
+      {allocationErrorModal ? (
+        <div
+          className="crz-allocation-error-overlay"
+          role="presentation"
+          onClick={() => setAllocationErrorModal(null)}
+        >
+          <div
+            className="crz-allocation-error-modal"
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="allocation-error-title"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="crz-allocation-error-icon" aria-hidden="true">!</div>
+            <h3 id="allocation-error-title">{allocationErrorModal.title}</h3>
+            <p className="crz-allocation-error-product">{allocationErrorModal.productName}</p>
+
+            {Number.isFinite(allocationErrorModal.totalRemainingAllocation) ? (
+              <div className="crz-allocation-error-summary">
+                <div>
+                  <span>Regional total</span>
+                  <strong>{allocationErrorModal.totalRemainingAllocation} units</strong>
+                </div>
+                <div>
+                  <span>Central stock</span>
+                  <strong>{allocationErrorModal.centralStock} units</strong>
+                </div>
+                <div className="crz-allocation-error-excess">
+                  <span>Reduce allocation by</span>
+                  <strong>{allocationErrorModal.excessUnits} units</strong>
+                </div>
+              </div>
+            ) : null}
+
+            <p className="crz-allocation-error-message">{allocationErrorModal.message}</p>
+            <button
+              type="button"
+              className="crz-allocation-error-action"
+              onClick={() => setAllocationErrorModal(null)}
+            >
+              Review Allocations
+            </button>
+          </div>
+        </div>
+      ) : null}
 
       {showLogoutConfirm && (
         <div className="crz-logout-overlay" onClick={() => setShowLogoutConfirm(false)}>

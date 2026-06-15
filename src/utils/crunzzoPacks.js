@@ -12,28 +12,30 @@ export function normalizeCrunzzoPackOptions(product = {}) {
   const savedOptions = Array.isArray(product.packOptions) ? product.packOptions : [];
   const legacyRate = toNumber(product.rate || product.price, 0);
   const legacyGst = toNumber(product.gst, 18);
-  const legacyStock = toNumber(product.stock, 0);
+  const totalUnits = toNumber(product.stock, 0);
 
   return CRUNZZO_PACKS.map((pack) => {
-    const saved =
-      savedOptions.find((item) => item.id === pack.id) ||
-      savedOptions.find((item) => Number(item.packSize || item.units) === pack.packSize) ||
-      {};
+    const saved = savedOptions.find((item) => item.id === pack.id) || {};
 
-    const fallbackRate = legacyRate > 0 ? legacyRate * pack.packSize : 0;
-    const fallbackStock = legacyStock > 0 ? Math.floor(legacyStock / pack.packSize) : 0;
+    // Prioritize the saved pack size from database
+    const pSize = Math.max(1, toNumber(saved.packSize || saved.units, pack.packSize));
+
+    const fallbackRate = legacyRate > 0 ? legacyRate * pSize : 0;
+
+    // Displayed pack count is floor of total units / pack size
+    const packCount = Math.floor(totalUnits / pSize);
 
     return {
       id: pack.id,
-      label: saved.label || pack.label,
-      packSize: pack.packSize,
+      label: `Pack of ${pSize}`,
+      packSize: pSize,
       rate: toNumber(saved.rate ?? saved.price, fallbackRate),
       price: toNumber(saved.rate ?? saved.price, fallbackRate),
       pricingGroup: saved.pricingGroup || product.pricingGroup || "Standard Retail",
       gst: toNumber(saved.gst, legacyGst),
-      stock: toNumber(saved.stock ?? saved.quantity, fallbackStock),
+      stock: packCount, // This is used for "X packs" display
       lowStockThreshold: toNumber(
-        saved.lowStockThreshold,
+        product.lowStockThreshold,
         pack.defaultLowStockThreshold
       ),
     };
@@ -41,41 +43,58 @@ export function normalizeCrunzzoPackOptions(product = {}) {
 }
 
 export function buildCrunzzoPackOptionsFromForm(form) {
-  return CRUNZZO_PACKS.map((pack) => ({
-    id: pack.id,
-    label: pack.label,
-    packSize: pack.packSize,
-    rate: toNumber(form[`${pack.id}Rate`], 0),
-    price: toNumber(form[`${pack.id}Rate`], 0),
-    pricingGroup: form[`${pack.id}PricingGroup`] || form.pricingGroup || "Standard Retail",
-    gst: toNumber(form[`${pack.id}Gst`], 18),
-    stock: toNumber(form[`${pack.id}Stock`], 0),
-    openingStock: toNumber(form[`${pack.id}Stock`], 0),
-    lowStockThreshold: toNumber(
-      form[`${pack.id}LowStockThreshold`],
-      pack.defaultLowStockThreshold
-    ),
-  }));
+  const sharedGst = toNumber(form.gst, 18);
+  const totalUnits = toNumber(form.stock, 0);
+  const sharedLowStock = toNumber(form.lowStockThreshold, 0);
+
+  return CRUNZZO_PACKS.map((pack) => {
+    const pSize = Math.max(1, toNumber(form[`${pack.id}Size`], pack.packSize));
+    return {
+      id: pack.id,
+      label: `Pack of ${pSize}`,
+      packSize: pSize,
+      rate: toNumber(form[`${pack.id}Rate`], 0),
+      price: toNumber(form[`${pack.id}Rate`], 0),
+      pricingGroup: form[`${pack.id}PricingGroup`] || form.pricingGroup || "Standard Retail",
+      gst: sharedGst,
+      stock: Math.floor(totalUnits / pSize),
+      openingStock: Math.floor(totalUnits / pSize),
+      lowStockThreshold: sharedLowStock,
+    };
+  });
 }
 
 export function getCrunzzoTotalUnits(productOrOptions) {
-  const packOptions = Array.isArray(productOrOptions)
-    ? productOrOptions
-    : normalizeCrunzzoPackOptions(productOrOptions);
+  // If it's a product object, return its stock field directly
+  if (productOrOptions && !Array.isArray(productOrOptions) && productOrOptions.stock !== undefined) {
+    return toNumber(productOrOptions.stock, 0);
+  }
 
-  return packOptions.reduce((sum, pack) => {
-    return sum + toNumber(pack.stock, 0) * toNumber(pack.packSize, 1);
-  }, 0);
+  // If we only have packOptions (array), we must return the floor-derived sum
+  // Note: We should prefer passing the full product object to this function
+  if (Array.isArray(productOrOptions)) {
+    return productOrOptions.reduce((sum, pack) => {
+      return sum + toNumber(pack.stock, 0) * toNumber(pack.packSize, 1);
+    }, 0);
+  }
+
+  return 0;
 }
 
 export function getCrunzzoInventoryValue(product) {
-  return normalizeCrunzzoPackOptions(product).reduce((sum, pack) => {
-    return sum + toNumber(pack.stock, 0) * toNumber(pack.rate || pack.price, 0);
-  }, 0);
+  const totalUnits = getCrunzzoTotalUnits(product);
+  const options = normalizeCrunzzoPackOptions(product);
+  if (options.length === 0) return 0;
+
+  // Use the price of the first pack (Standard Retail) to determine unit value
+  const primary = options[0];
+  const unitPrice = toNumber(primary.rate || primary.price, 0) / Math.max(1, primary.packSize);
+
+  return totalUnits * unitPrice;
 }
 
 export function isCrunzzoLowStock(product) {
-  return normalizeCrunzzoPackOptions(product).some((pack) => {
-    return toNumber(pack.stock, 0) <= toNumber(pack.lowStockThreshold, 0);
-  });
+  const totalUnits = getCrunzzoTotalUnits(product);
+  const threshold = toNumber(product.lowStockThreshold, 0);
+  return totalUnits <= threshold;
 }

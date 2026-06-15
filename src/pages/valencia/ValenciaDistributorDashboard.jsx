@@ -42,6 +42,10 @@ function sanitizePhoneInput(value) {
   return value.replace(/\D/g, "").slice(0, 10);
 }
 
+function sanitizeNameInput(value) {
+  return value.replace(/[0-9]/g, "");
+}
+
 function sanitizePincodeInput(value) {
   return value.replace(/\D/g, "").slice(0, 6);
 }
@@ -554,6 +558,8 @@ export default function ValenciaDistributorDashboard() {
     rootScreen: "home",
     currentScreen: screen,
     setScreen,
+
+    onRootBack: () => setShowLogoutConfirm(true),
   });
 
   useEffect(() => {
@@ -822,6 +828,8 @@ export default function ValenciaDistributorDashboard() {
 
     if (name === "phone") {
       finalValue = sanitizePhoneInput(value);
+    } else if (name === "name" || name === "businessName") {
+      finalValue = sanitizeNameInput(value);
     }
 
     setProfileMessage("");
@@ -1789,8 +1797,10 @@ export default function ValenciaDistributorDashboard() {
           style={{
             display: "flex",
             flexDirection: "column",
-            minHeight: "100vh",
+            minHeight: "100dvh",
+            height: "100dvh",
             overflow: "hidden",
+            padding: "16px 16px 0",
           }}
         >
           <div

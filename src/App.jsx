@@ -6,6 +6,7 @@ import LoginPage from "./pages/LoginPage";
 
 import CrunzzoDistributorDashboard from "./pages/crunzzo/CrunzzoDistributorDashboard";
 import CrunzzoAdminDashboard from "./pages/crunzzo/CrunzzoAdminDashboard";
+import CrunzzoSuperStockistDashboard from "./pages/crunzzo/CrunzzoSuperStockistDashboard";
 
 import BounceDistributorDashboard from "./pages/bounce/BounceDistributorDashboard";
 import BounceAdminDashboard from "./pages/bounce/BounceAdminDashboard";
@@ -22,6 +23,7 @@ export default function App() {
 
       <Route path="/crunzzo/distributor/:tab?" element={<CrunzzoDistributorDashboard />} />
       <Route path="/crunzzo/admin/:tab?" element={<CrunzzoAdminDashboard />} />
+      <Route path="/crunzzo/super-stockist/:tab?" element={<CrunzzoSuperStockistDashboard />} />
 
       <Route path="/bounce/distributor/:tab?" element={<BounceDistributorDashboard />} />
       <Route path="/bounce/admin/:tab?" element={<BounceAdminDashboard />} />

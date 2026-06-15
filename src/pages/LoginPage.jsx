@@ -13,6 +13,7 @@ import {
 import { doc, getDoc, setDoc, serverTimestamp } from "firebase/firestore";
 
 import { getFirebaseServices, setSelectedBackend } from "../firebase";
+import { CRUNZZO_REGIONS, normalizeCrunzzoRegion } from "../utils/crunzzoRegions";
 
 import valenciaLogo from "../assets/drink-valencia-logo.jpg";
 import bounceLogo from "../assets/9aaf616a1f05b52baba7f0d12dcc6600408fd0e3 (1).png";
@@ -107,6 +108,7 @@ const initialSignupData = {
   fullName: "",
   businessName: "",
   phone: "",
+  region: "Chennai",
   email: "",
   password: "",
   confirmPassword: "",
@@ -165,6 +167,8 @@ export default function LoginPage({ setUserProfile }) {
 
     if (name === "phone") {
       finalValue = value.replace(/\D/g, "").slice(0, 10);
+    } else if (name === "fullName" || name === "businessName") {
+      finalValue = value.replace(/[0-9]/g, "");
     }
 
     setError("");
@@ -178,6 +182,11 @@ export default function LoginPage({ setUserProfile }) {
   const goByRole = (profile) => {
     if (profile.role === "admin") {
       navigate(`/${sectionKey}/admin`, { replace: true });
+      return;
+    }
+
+    if (profile.role === "super_stockist" && sectionKey === "crunzzo") {
+      navigate("/crunzzo/super-stockist", { replace: true });
       return;
     }
 
@@ -221,6 +230,12 @@ export default function LoginPage({ setUserProfile }) {
         return;
       }
 
+      if (profileData.role === "super_stockist" && sectionKey !== "crunzzo") {
+        setError("Super Stockist accounts are only available for Crunzzo.");
+        await signOut(auth);
+        return;
+      }
+
       const finalProfile = {
         uid: loggedInUser.uid,
         email: loggedInUser.email,
@@ -248,6 +263,7 @@ export default function LoginPage({ setUserProfile }) {
     const fullName = signupData.fullName.trim();
     const businessName = signupData.businessName.trim();
     const phone = signupData.phone.trim();
+    const region = normalizeCrunzzoRegion(signupData.region, "");
     const email = signupData.email.trim();
     const password = signupData.password.trim();
     const confirmPassword = signupData.confirmPassword.trim();
@@ -259,6 +275,11 @@ export default function LoginPage({ setUserProfile }) {
 
     if (!/^\d{10}$/.test(phone)) {
       setError("Phone number must be exactly 10 digits.");
+      return;
+    }
+
+    if (sectionKey === "crunzzo" && !region) {
+      setError("Please select a Crunzzo region.");
       return;
     }
 
@@ -297,6 +318,10 @@ export default function LoginPage({ setUserProfile }) {
         section: sectionKey,
         createdAt: serverTimestamp(),
       };
+
+      if (sectionKey === "crunzzo") {
+        firestorePayload.region = region;
+      }
 
       await setDoc(doc(db, "users", createdUser.uid), firestorePayload);
 
@@ -380,6 +405,12 @@ export default function LoginPage({ setUserProfile }) {
       }
 
       const profileData = userSnap.data();
+
+      if (profileData.role === "super_stockist" && sectionKey !== "crunzzo") {
+        setError("Super Stockist accounts are only available for Crunzzo.");
+        await signOut(auth);
+        return;
+      }
 
       const finalProfile = {
         uid: user.uid,
@@ -543,6 +574,23 @@ export default function LoginPage({ setUserProfile }) {
                 onChange={handleSignupChange}
               />
             </div>
+
+            {sectionKey === "crunzzo" ? (
+              <div className="crz-field">
+                <label>Region</label>
+                <select
+                  name="region"
+                  value={signupData.region}
+                  onChange={handleSignupChange}
+                >
+                  {CRUNZZO_REGIONS.map((region) => (
+                    <option key={region.id} value={region.name}>
+                      {region.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            ) : null}
 
             <div className="crz-field">
               <label>Email</label>
