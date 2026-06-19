@@ -7,8 +7,6 @@ import {
   signInWithEmailAndPassword,
   signOut,
   updateProfile,
-  GoogleAuthProvider,
-  signInWithPopup,
 } from "firebase/auth";
 import { doc, getDoc, setDoc, serverTimestamp } from "firebase/firestore";
 
@@ -50,31 +48,6 @@ function getErrorMessage(error) {
   }
 }
 
-function GoogleIcon() {
-  return (
-    <svg className="crz-social-svg" viewBox="0 0 24 24" aria-hidden="true">
-      <path
-        fill="#4285F4"
-        d="M23.49 12.27c0-.79-.07-1.55-.2-2.27H12v4.3h6.44a5.5 5.5 0 0 1-2.39 3.61v3h3.86c2.26-2.08 3.58-5.14 3.58-8.64z"
-      />
-      <path
-        fill="#34A853"
-        d="M12 24c3.24 0 5.96-1.07 7.95-2.91l-3.86-3c-1.07.72-2.44 1.15-4.09 1.15-3.14 0-5.79-2.12-6.74-4.96H1.27v3.09A12 12 0 0 0 12 24z"
-      />
-      <path
-        fill="#FBBC05"
-        d="M5.26 14.28A7.2 7.2 0 0 1 4.88 12c0-.79.14-1.55.38-2.28V6.63H1.27A12 12 0 0 0 0 12c0 1.93.46 3.76 1.27 5.37l3.99-3.09z"
-      />
-      <path
-        fill="#EA4335"
-        d="M12 4.77c1.76 0 3.34.61 4.58 1.8l3.44-3.44C17.95 1.2 15.23 0 12 0A12 12 0 0 0 1.27 6.63l3.99 3.09c.95-2.84 3.6-4.95 6.74-4.95z"
-      />
-    </svg>
-  );
-}
-
-
-
 const brandMap = {
   valencia: {
     label: "Drink Valencia",
@@ -108,6 +81,7 @@ const initialSignupData = {
   fullName: "",
   businessName: "",
   phone: "",
+  accountType: "distributor",
   region: "Chennai",
   email: "",
   password: "",
@@ -190,6 +164,11 @@ export default function LoginPage({ setUserProfile }) {
       return;
     }
 
+    if (profile.role === "retailer" && sectionKey === "crunzzo") {
+      navigate("/crunzzo/retailer", { replace: true });
+      return;
+    }
+
     navigate(`/${sectionKey}/distributor`, { replace: true });
   };
 
@@ -236,6 +215,12 @@ export default function LoginPage({ setUserProfile }) {
         return;
       }
 
+      if (profileData.role === "retailer" && sectionKey !== "crunzzo") {
+        setError("Retailer accounts are only available for Crunzzo.");
+        await signOut(auth);
+        return;
+      }
+
       const finalProfile = {
         uid: loggedInUser.uid,
         email: loggedInUser.email,
@@ -264,6 +249,10 @@ export default function LoginPage({ setUserProfile }) {
     const businessName = signupData.businessName.trim();
     const phone = signupData.phone.trim();
     const region = normalizeCrunzzoRegion(signupData.region, "");
+    const accountType =
+      sectionKey === "crunzzo" && signupData.accountType === "retailer"
+        ? "retailer"
+        : "distributor";
     const email = signupData.email.trim();
     const password = signupData.password.trim();
     const confirmPassword = signupData.confirmPassword.trim();
@@ -306,14 +295,20 @@ export default function LoginPage({ setUserProfile }) {
         displayName: fullName,
       });
 
-      const distributorId = `DIST-${createdUser.uid.slice(0, 6).toUpperCase()}`;
+      const accountId = `${accountType === "retailer" ? "RTL" : "DIST"}-${createdUser.uid
+        .slice(0, 6)
+        .toUpperCase()}`;
 
       const firestorePayload = {
         name: fullName,
         businessName,
         phone,
-        role: "distributor",
-        distributorId,
+        role: accountType,
+        accountType,
+        partnerId: accountId,
+        ...(accountType === "retailer"
+          ? { retailerId: accountId }
+          : { distributorId: accountId }),
         status: "active",
         section: sectionKey,
         createdAt: serverTimestamp(),
@@ -373,58 +368,6 @@ export default function LoginPage({ setUserProfile }) {
       setInfoMessage(`Password reset email sent to ${email}`);
     } catch (err) {
       console.error("Forgot password error:", err);
-      setError(getErrorMessage(err));
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleGoogleLogin = async () => {
-    setError("");
-    setInfoMessage("");
-
-    try {
-      setLoading(true);
-      // Ensure we are using the correct backend before auth
-      setSelectedBackend(selectedBrand.backend);
-
-      const provider = new GoogleAuthProvider();
-      provider.setCustomParameters({ prompt: "select_account" });
-
-      const result = await signInWithPopup(auth, provider);
-      const user = result.user;
-
-      // Check if user exists in the specific backend's Firestore
-      const userRef = doc(db, "users", user.uid);
-      const userSnap = await getDoc(userRef);
-
-      if (!userSnap.exists()) {
-        setError("Account not found. Please create an account first.");
-        await signOut(auth);
-        return;
-      }
-
-      const profileData = userSnap.data();
-
-      if (profileData.role === "super_stockist" && sectionKey !== "crunzzo") {
-        setError("Super Stockist accounts are only available for Crunzzo.");
-        await signOut(auth);
-        return;
-      }
-
-      const finalProfile = {
-        uid: user.uid,
-        email: user.email,
-        ...profileData,
-      };
-
-      if (setUserProfile) {
-        setUserProfile(finalProfile);
-      }
-
-      goByRole(finalProfile);
-    } catch (err) {
-      console.error("Google login error:", err);
       setError(getErrorMessage(err));
     } finally {
       setLoading(false);
@@ -519,24 +462,6 @@ export default function LoginPage({ setUserProfile }) {
             <button type="submit" className="crz-login-btn" disabled={loading}>
               {loading ? "Logging in..." : "Login"}
             </button>
-
-            <div className="crz-divider">
-              <span>or continue with</span>
-            </div>
-
-            <div className="crz-social-stack">
-              <button
-                type="button"
-                className="crz-social-btn"
-                onClick={handleGoogleLogin}
-                disabled={loading}
-              >
-                <GoogleIcon />
-                <span>Login with Google</span>
-              </button>
-
-
-            </div>
           </form>
         ) : (
           <form onSubmit={handleSignup} className="crz-form">
@@ -574,6 +499,34 @@ export default function LoginPage({ setUserProfile }) {
                 onChange={handleSignupChange}
               />
             </div>
+
+            {sectionKey === "crunzzo" ? (
+              <div className="crz-field">
+                <label>Account Type</label>
+                <div className="crz-radio-row">
+                  <label className="crz-radio-option">
+                    <input
+                      type="radio"
+                      name="accountType"
+                      value="distributor"
+                      checked={signupData.accountType === "distributor"}
+                      onChange={handleSignupChange}
+                    />
+                    <span>Distributor</span>
+                  </label>
+                  <label className="crz-radio-option">
+                    <input
+                      type="radio"
+                      name="accountType"
+                      value="retailer"
+                      checked={signupData.accountType === "retailer"}
+                      onChange={handleSignupChange}
+                    />
+                    <span>Retailer</span>
+                  </label>
+                </div>
+              </div>
+            ) : null}
 
             {sectionKey === "crunzzo" ? (
               <div className="crz-field">

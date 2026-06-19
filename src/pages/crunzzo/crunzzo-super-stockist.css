@@ -43,6 +43,40 @@
 .css-header p, .css-title-block p, .css-card p { margin: 4px 0 0; color: #7d879b; font-size: 12px; }
 .css-logo { height: 42px; max-width: 145px; object-fit: contain; }
 
+.css-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.css-alert-button,
+.css-header-logout {
+  height: 34px;
+  padding: 0 10px;
+  border-radius: 10px;
+  background: #fff;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 900;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.css-alert-button {
+  border: 1px solid #f4b8bc;
+  color: #e51f28;
+}
+
+.css-alert-button.active {
+  background: #fff0f0;
+}
+
+.css-header-logout {
+  border: 1px solid #e9e9e9;
+  color: #e51f28;
+}
+
 .css-avatar,
 .css-profile-photo {
   border-radius: 50%;
@@ -83,6 +117,132 @@
 .css-summary-card h2, .css-card h2 { margin: 0; font-size: 15px; }
 .css-summary-card div { display: flex; justify-content: space-between; padding-top: 12px; margin-top: 12px; border-top: 1px solid #efefef; font-size: 13px; }
 
+.css-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 16px 0 10px;
+}
+
+.css-section-head h2 {
+  margin: 0;
+  font-size: 17px;
+}
+
+.css-section-head button {
+  border: none;
+  background: transparent;
+  color: #e51f28;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 900;
+  cursor: pointer;
+}
+
+.css-sale-card {
+  display: grid;
+  gap: 10px;
+}
+
+.css-sale-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.css-sale-head h2 {
+  margin: 0;
+  font-size: 15px;
+}
+
+.css-sale-head p {
+  margin-top: 3px;
+}
+
+.css-sale-head strong {
+  color: #e51f28;
+  white-space: nowrap;
+}
+
+.css-sale-items {
+  line-height: 1.4;
+}
+
+.css-sale-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.css-sale-meta span {
+  padding: 6px 8px;
+  border-radius: 999px;
+  background: #fff0f0;
+  color: #a91d24;
+  font-size: 10px;
+  font-weight: 900;
+}
+
+.css-sales-hero {
+  display: grid;
+  gap: 4px;
+  margin-bottom: 12px;
+  border-radius: 18px;
+  padding: 18px;
+  background: linear-gradient(180deg, #ff5b5b 0%, #d81b25 100%);
+  color: #fff;
+}
+
+.css-sales-hero small {
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  opacity: 0.78;
+}
+
+.css-sales-hero strong {
+  font-size: 27px;
+  line-height: 1.1;
+}
+
+.css-sales-hero span {
+  font-size: 12px;
+  font-weight: 800;
+  opacity: 0.86;
+}
+
+.css-sales-search {
+  margin: 0 0 10px;
+}
+
+.css-sales-search input {
+  width: 100%;
+  height: 44px;
+  border: 1px solid #e0e4eb;
+  border-radius: 13px;
+  padding: 0 13px;
+  box-sizing: border-box;
+  font: inherit;
+  outline: none;
+}
+
+.css-sales-search input:focus {
+  border-color: #e51f28;
+  box-shadow: 0 0 0 3px rgba(229, 31, 40, 0.08);
+}
+
+.css-history-label {
+  margin: 8px 0 10px;
+  color: #7d879b;
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
 .css-list { display: grid; gap: 11px; }
 .css-product-head strong { color: #e51f28; font-size: 14px; }
 .css-allocation-row { margin-top: 11px; font-size: 13px; }
@@ -120,6 +280,116 @@
 .css-message { margin-bottom: 12px; padding: 10px 12px; border-radius: 12px; font-size: 12px; font-weight: 800; }
 .css-message.success { color: #16803a; background: #eef9f0; border: 1px solid #d7f0dc; }
 .css-message.error { color: #d42424; background: #fff0f0; border: 1px solid #ffd1d1; }
+
+.css-notification-row {
+  display: grid;
+  grid-template-columns: 10px minmax(0, 1fr);
+  gap: 12px;
+}
+
+.css-notification-button {
+  display: block;
+  width: 100%;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.css-notification-card {
+  transition: border-color 160ms ease, box-shadow 160ms ease, opacity 160ms ease;
+}
+
+.css-notification-card:not(.is-viewed) {
+  border-color: rgba(229, 31, 40, 0.28);
+  box-shadow: 0 10px 24px rgba(32, 38, 58, 0.04);
+}
+
+.css-notification-card.is-viewed {
+  opacity: 0.72;
+}
+
+.css-notification-row > span {
+  width: 10px;
+  min-height: 48px;
+  border-radius: 999px;
+}
+
+.css-notification-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.css-notification-head h2 {
+  margin: 0;
+  font-size: 14px;
+}
+
+.css-notification-head small {
+  color: #7d879b;
+  font-size: 10px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.css-read-pill {
+  display: inline-flex;
+  margin-top: 9px;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: #fff0f0;
+  color: #e51f28;
+  font-size: 10px;
+  font-weight: 900;
+}
+
+.css-read-pill.is-viewed {
+  background: #f3f4f6;
+  color: #7d879b;
+}
+
+.css-notification-detail-marker {
+  width: 12px;
+  height: 44px;
+  border-radius: 999px;
+  margin-bottom: 12px;
+}
+
+.css-notification-detail-time,
+.css-notification-detail-message {
+  margin: 0 0 12px;
+}
+
+.css-notification-detail-time {
+  color: #7d879b;
+  font-size: 12px;
+}
+
+.css-notification-detail-message {
+  color: #20263a;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.css-notification-detail-body {
+  padding: 12px;
+  border-radius: 12px;
+  background: #f7f8fb;
+  color: #20263a;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  text-align: left;
+}
+
+.css-notification-detail-body + .crz-logout-confirm {
+  width: 100%;
+  margin-top: 14px;
+}
 
 .css-bottom-nav {
   flex-shrink: 0;

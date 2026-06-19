@@ -2,7 +2,6 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { onAuthStateChanged, signOut } from "firebase/auth";
 import {
-  addDoc,
   collection,
   doc,
   getDoc,
@@ -90,12 +89,21 @@ function escapeHtml(value = "") {
 
 function buildInvoiceHtml(order) {
   const invoiceNumber = order?.invoiceNumber || `INV-${Date.now()}`;
+  const isRetailerOrder = order?.orderType === "retailer_purchase" || Boolean(order?.retailerUid);
+  const partnerLabel = isRetailerOrder ? "Retailer" : "Distributor";
+  const partnerName = order?.partnerName || order?.retailerName || order?.distributorName || "-";
+  const discountLabel = isRetailerOrder ? "Product Offers" : "Wholesale Discount";
+  const discountAmount = isRetailerOrder
+    ? Number(order?.retailerOfferDiscount || order?.discountTotal || 0)
+    : Number(order?.wholesaleDiscount || 0);
 
   const rows = (order?.items || [])
     .map((item, index) => {
       const qty = Number(item.quantity || 0);
       const rate = Number(item.rate || 0);
-      const total = qty * rate;
+      const total = Number.isFinite(Number(item.lineNetTotal))
+        ? Number(item.lineNetTotal)
+        : qty * rate;
 
       return `
         <tr>
@@ -222,8 +230,8 @@ function buildInvoiceHtml(order) {
                 <div class="value">${escapeHtml(order?.salesPincode || order?.pincode || order?.salesZone || "-")}</div>
               </div>
               <div>
-                <div class="label">Distributor</div>
-                <div class="value">${escapeHtml(order?.distributorName || "-")}</div>
+                <div class="label">${partnerLabel}</div>
+                <div class="value">${escapeHtml(partnerName)}</div>
               </div>
               <div>
                 <div class="label">Created At</div>
@@ -255,8 +263,8 @@ function buildInvoiceHtml(order) {
                 <span>${formatRupees(order?.subtotal || 0)}</span>
               </div>
               <div class="row">
-                <span>Wholesale Discount</span>
-                <span>- ${formatRupees(order?.wholesaleDiscount || 0)}</span>
+                <span>${discountLabel}</span>
+                <span>- ${formatRupees(discountAmount)}</span>
               </div>
               <div class="row">
                 <span>Tax</span>
@@ -305,6 +313,86 @@ const NAV_ACTIVE = "#e51f28";
 const BRAND_ACCENT = "#e51f28";
 const BRAND_GRAD_FROM = "#ff5b5b";
 const BRAND_GRAD_TO = "#d81b25";
+const DISTRIBUTOR_VIEWED_NOTIFICATIONS_KEY = "crunzzo_distributor_viewed_notifications_v1";
+
+function readStoredIdMap(key) {
+  if (typeof window === "undefined") return {};
+  try {
+    const saved = window.localStorage.getItem(key);
+    return saved ? JSON.parse(saved) : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveStoredIdMap(key, value) {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    // Notification read state is local UI state and should never block orders.
+  }
+}
+
+function getDashboardMode(accountType) {
+  return accountType === "retailer" ? "retailer" : "distributor";
+}
+
+function getRetailerOfferPercent(product) {
+  const raw = Number(product?.retailerOfferPercent ?? product?.offerPercent ?? 0);
+  if (!Number.isFinite(raw)) return 0;
+  return Math.min(100, Math.max(0, raw));
+}
+
+function isRetailerOrder(order) {
+  return order?.orderType === "retailer_purchase" || Boolean(order?.retailerUid);
+}
+
+function getOrderPartnerName(order) {
+  return (
+    order?.partnerName ||
+    order?.retailerName ||
+    order?.distributorName ||
+    order?.shopName ||
+    "Partner"
+  );
+}
+
+function getOrderUnits(order) {
+  const directUnits = Number(order?.totalUnits || 0);
+  if (directUnits > 0) return directUnits;
+
+  return (order?.items || []).reduce((sum, item) => {
+    return sum + Number(item.totalUnits || 0);
+  }, 0);
+}
+
+function getOrderItemsSummary(order) {
+  const items = Array.isArray(order?.items) ? order.items : [];
+  if (!items.length) return "No item details saved";
+
+  return items
+    .map((item) => {
+      const quantity = Number(item.quantity || 1);
+      const units = Number(item.totalUnits || 0);
+      return `${item.name || "Item"} x ${quantity} (${units} units)`;
+    })
+    .join(", ");
+}
+
+function formatNotificationTime(value) {
+  if (!value) return "-";
+  try {
+    return new Date(value).toLocaleString("en-IN", {
+      day: "2-digit",
+      month: "short",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  } catch {
+    return "-";
+  }
+}
 
 function ThemeOverrides() {
   return (
@@ -544,9 +632,17 @@ function ProfileMenuRow({ icon, title, subtitle, onClick, accent }) {
   );
 }
 
-export default function CrunzzoDistributorDashboard() {
+export default function CrunzzoDistributorDashboard({ accountType = "distributor" } = {}) {
   const navigate = useNavigate();
   const fileInputRef = useRef(null);
+  const dashboardMode = getDashboardMode(accountType);
+  const isRetailer = dashboardMode === "retailer";
+  const roleLabel = isRetailer ? "Retailer" : "Distributor";
+  const roleFallbackName = isRetailer ? "Retailer" : "Distributor";
+  const rolePath = isRetailer ? "/crunzzo/retailer" : "/crunzzo/distributor";
+  const transactionLabel = isRetailer ? "Purchase" : "Sale";
+  const transactionVerb = isRetailer ? "purchase" : "sell";
+  const transactionNoun = isRetailer ? "purchase" : "sale";
 
   const [screen, setScreen] = useState("home");
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
@@ -562,6 +658,12 @@ export default function CrunzzoDistributorDashboard() {
   const [products, setProducts] = useState([]);
   const [regionalInventory, setRegionalInventory] = useState({});
   const [orders, setOrders] = useState([]);
+  const [regionalNotificationOrders, setRegionalNotificationOrders] = useState([]);
+  const [notificationError, setNotificationError] = useState("");
+  const [viewedNotifications, setViewedNotifications] = useState(() =>
+    readStoredIdMap(DISTRIBUTOR_VIEWED_NOTIFICATIONS_KEY)
+  );
+  const [selectedNotification, setSelectedNotification] = useState(null);
   const [lastOrder, setLastOrder] = useState(null);
 
   const [customer, setCustomer] = useState({
@@ -595,8 +697,8 @@ export default function CrunzzoDistributorDashboard() {
   });
 
   const goToScreen = usePortalHistoryManager({
-    portalKey: "crunzzo-distributor",
-    basePath: "/crunzzo/distributor",
+    portalKey: `crunzzo-${dashboardMode}`,
+    basePath: rolePath,
     rootScreen: "home",
     currentScreen: screen,
     setScreen,
@@ -608,11 +710,14 @@ export default function CrunzzoDistributorDashboard() {
 
   useEffect(() => {
     let unsubscribeOrders = () => { };
+    let unsubscribeRegionalNotifications = () => { };
 
     const unsubscribeAuth = onAuthStateChanged(auth, async (user) => {
       if (!user) {
         setUserProfile(null);
         setOrders([]);
+        setRegionalNotificationOrders([]);
+        setNotificationError("");
         setLoadingProfile(false);
         setLoadingRegionalInventory(false);
         setLoadingOrders(false);
@@ -646,6 +751,22 @@ export default function CrunzzoDistributorDashboard() {
           return;
         }
 
+        if (merged.role === "retailer" && !isRetailer) {
+          setLoadingProfile(false);
+          setLoadingRegionalInventory(false);
+          setLoadingOrders(false);
+          navigate("/crunzzo/retailer", { replace: true });
+          return;
+        }
+
+        if (merged.role !== "retailer" && isRetailer) {
+          setLoadingProfile(false);
+          setLoadingRegionalInventory(false);
+          setLoadingOrders(false);
+          navigate("/crunzzo/distributor", { replace: true });
+          return;
+        }
+
         const region = getCrunzzoUserRegion(merged);
         const regionId = getCrunzzoRegionId(region);
         const regionalProfile = { ...merged, region };
@@ -665,7 +786,7 @@ export default function CrunzzoDistributorDashboard() {
         }
 
         unsubscribeOrders = onSnapshot(
-          query(collection(db, "orders"), where("distributorUid", "==", user.uid)),
+          query(collection(db, "orders"), where(isRetailer ? "retailerUid" : "distributorUid", "==", user.uid)),
           (snapshot) => {
             const rows = snapshot.docs
               .map((docSnap) => ({
@@ -682,6 +803,32 @@ export default function CrunzzoDistributorDashboard() {
             setLoadingOrders(false);
           }
         );
+
+        if (!isRetailer && region) {
+          unsubscribeRegionalNotifications = onSnapshot(
+            query(collection(db, "orders"), where("region", "==", region)),
+            (snapshot) => {
+              const rows = snapshot.docs
+                .map((docSnap) => ({
+                  id: docSnap.id,
+                  ...docSnap.data(),
+                }))
+                .filter(isRetailerOrder)
+                .sort((a, b) => Number(b.createdAtMs || 0) - Number(a.createdAtMs || 0));
+
+              setRegionalNotificationOrders(rows);
+              setNotificationError("");
+            },
+            (error) => {
+              console.warn("Regional notification fetch error:", error);
+              setRegionalNotificationOrders([]);
+              setNotificationError("Regional retailer notifications need Firestore read access for same-region orders.");
+            }
+          );
+        } else {
+          setRegionalNotificationOrders([]);
+          setNotificationError("");
+        }
 
       } catch (error) {
         console.error("Profile fetch error:", error);
@@ -716,9 +863,10 @@ export default function CrunzzoDistributorDashboard() {
     return () => {
       unsubscribeAuth();
       unsubscribeOrders();
+      unsubscribeRegionalNotifications();
       unsubscribeProducts();
     };
-  }, [navigate]);
+  }, [isRetailer, navigate]);
 
   useEffect(() => {
     const regionId = getCrunzzoRegionId(userProfile?.region);
@@ -812,6 +960,10 @@ export default function CrunzzoDistributorDashboard() {
         .map((pack) => {
           const quantity = cart[`${product.id}_${pack.id}`];
           const rate = Number(pack.rate || 0);
+          const lineTotal = quantity * rate;
+          const offerPercent = isRetailer ? getRetailerOfferPercent(product) : 0;
+          const lineDiscount = lineTotal * (offerPercent / 100);
+          const lineNetTotal = lineTotal - lineDiscount;
 
           return {
             ...product,
@@ -825,22 +977,34 @@ export default function CrunzzoDistributorDashboard() {
             gst: Number(pack.gst || 0),
             unitLabel: pack.label,
             rate,
-            lineTotal: quantity * rate,
-            rateLabel: `${formatRupees(rate)} / ${pack.label}`,
+            offerPercent,
+            lineDiscount,
+            lineNetTotal,
+            linePayable: lineNetTotal,
+            lineTotal,
+            rateLabel: offerPercent
+              ? `${formatRupees(rate)} / ${pack.label} - ${offerPercent}% offer`
+              : `${formatRupees(rate)} / ${pack.label}`,
           };
         });
     });
-  }, [products, cart]);
+  }, [products, cart, isRetailer]);
 
   const totalUnits = selectedItems.reduce((sum, item) => sum + item.totalUnits, 0);
   const subtotal = selectedItems.reduce((sum, item) => sum + item.lineTotal, 0);
-  const wholesaleDiscount = subtotal * 0.05;
-  const taxableValue = subtotal - wholesaleDiscount;
+  const retailerOfferDiscount = isRetailer
+    ? selectedItems.reduce((sum, item) => sum + Number(item.lineDiscount || 0), 0)
+    : 0;
+  const wholesaleDiscount = isRetailer ? 0 : subtotal * 0.05;
+  const taxableValue = Math.max(0, subtotal - wholesaleDiscount - retailerOfferDiscount);
   const weightedGstRate = subtotal
     ? selectedItems.reduce((sum, item) => sum + item.lineTotal * Number(item.gst || 0), 0) / subtotal
     : 0;
-  const tax = taxableValue * (weightedGstRate / 100);
+  const tax = isRetailer
+    ? selectedItems.reduce((sum, item) => sum + Number(item.lineNetTotal || 0) * (Number(item.gst || 0) / 100), 0)
+    : taxableValue * (weightedGstRate / 100);
   const totalSaleValue = taxableValue + tax;
+  const cartPreviewTotal = subtotal - retailerOfferDiscount;
 
   const { todayRevenue, todayUnits } = useMemo(() => {
     const d = new Date();
@@ -895,6 +1059,54 @@ export default function CrunzzoDistributorDashboard() {
   }, [filteredOrders]);
 
   const recentActivity = orders.slice(0, 3);
+  const distributorNotifications = useMemo(() => {
+    if (isRetailer) return [];
+
+    return regionalNotificationOrders.slice(0, 30).map((order) => {
+      const partnerName = getOrderPartnerName(order);
+      const totalUnits = getOrderUnits(order);
+      const itemSummary = getOrderItemsSummary(order);
+      return {
+        id: `retailer-order-${order.id}`,
+        tone: "#b45309",
+        title: "Retailer purchase in your region",
+        message: `${partnerName} • ${order.region || userProfile?.region || "No region"} • ${formatRupees(order.total || 0)}`,
+        detail: [
+          `Retailer: ${partnerName}`,
+          `Region: ${order.region || userProfile?.region || "No region"}`,
+          `Total: ${formatRupees(order.total || 0)}`,
+          `Units: ${totalUnits}`,
+          `Items: ${itemSummary}`,
+          order.invoiceNumber ? `Invoice: ${order.invoiceNumber}` : "",
+        ].filter(Boolean).join("\n"),
+        time: formatNotificationTime(order.createdAtMs),
+        createdAtMs: Number(order.createdAtMs || 0),
+      };
+    });
+  }, [isRetailer, regionalNotificationOrders, userProfile?.region]);
+
+  const unreadDistributorNotificationCount = distributorNotifications.filter(
+    (item) => !viewedNotifications[item.id]
+  ).length;
+  const prioritizedDistributorNotifications = useMemo(() => {
+    const unread = [];
+    const viewed = [];
+    distributorNotifications.forEach((item) => {
+      if (viewedNotifications[item.id]) viewed.push(item);
+      else unread.push(item);
+    });
+    return [...unread, ...viewed];
+  }, [distributorNotifications, viewedNotifications]);
+
+  const openDistributorNotification = (item) => {
+    setSelectedNotification(item);
+    setViewedNotifications((previous) => {
+      if (previous[item.id]) return previous;
+      const next = { ...previous, [item.id]: Date.now() };
+      saveStoredIdMap(DISTRIBUTOR_VIEWED_NOTIFICATIONS_KEY, next);
+      return next;
+    });
+  };
 
   const validateCustomerInputs = () => {
     if (!customer.shopName.trim()) {
@@ -1153,9 +1365,23 @@ export default function CrunzzoDistributorDashboard() {
 
   const buildCurrentInvoiceData = () => ({
     invoiceNumber: `INV-PREVIEW-${Date.now()}`,
-    distributorUid: userProfile?.uid || "",
-    distributorName: userProfile?.name || auth.currentUser?.displayName || "Distributor",
-    distributorId: userProfile?.distributorId || "",
+    orderType: isRetailer ? "retailer_purchase" : "distributor_sale",
+    accountRole: dashboardMode,
+    partnerRole: dashboardMode,
+    partnerUid: userProfile?.uid || "",
+    partnerName: userProfile?.name || auth.currentUser?.displayName || roleFallbackName,
+    partnerId: userProfile?.partnerId || userProfile?.retailerId || userProfile?.distributorId || "",
+    ...(isRetailer
+      ? {
+          retailerUid: userProfile?.uid || "",
+          retailerName: userProfile?.name || auth.currentUser?.displayName || "Retailer",
+          retailerId: userProfile?.retailerId || userProfile?.partnerId || "",
+        }
+      : {
+          distributorUid: userProfile?.uid || "",
+          distributorName: userProfile?.name || auth.currentUser?.displayName || "Distributor",
+          distributorId: userProfile?.distributorId || userProfile?.partnerId || "",
+        }),
     shopName: customer.shopName,
     phone: customer.phone,
     gst: customer.gst,
@@ -1163,6 +1389,8 @@ export default function CrunzzoDistributorDashboard() {
     pincode: customer.pincode,
     subtotal,
     wholesaleDiscount,
+    retailerOfferDiscount,
+    discountTotal: wholesaleDiscount + retailerOfferDiscount,
     tax,
     total: totalSaleValue,
     totalUnits,
@@ -1179,6 +1407,9 @@ export default function CrunzzoDistributorDashboard() {
       unitLabel: item.unitLabel || "",
       rate: Number(item.rate || 0),
       gst: Number(item.gst || 0),
+      offerPercent: Number(item.offerPercent || 0),
+      lineDiscount: Number(item.lineDiscount || 0),
+      lineNetTotal: Number(item.lineNetTotal || item.lineTotal || 0),
       lineTotal: item.lineTotal,
       imageUrl: item.imageUrl || "",
     })),
@@ -1224,9 +1455,23 @@ export default function CrunzzoDistributorDashboard() {
 
       const orderPayload = {
         invoiceNumber,
-        distributorUid: userProfile.uid,
-        distributorName: userProfile.name || auth.currentUser?.displayName || "Distributor",
-        distributorId: userProfile.distributorId || "",
+        orderType: isRetailer ? "retailer_purchase" : "distributor_sale",
+        accountRole: dashboardMode,
+        partnerRole: dashboardMode,
+        partnerUid: userProfile.uid,
+        partnerName: userProfile.name || auth.currentUser?.displayName || roleFallbackName,
+        partnerId: userProfile.partnerId || userProfile.retailerId || userProfile.distributorId || "",
+        ...(isRetailer
+          ? {
+              retailerUid: userProfile.uid,
+              retailerName: userProfile.name || auth.currentUser?.displayName || "Retailer",
+              retailerId: userProfile.retailerId || userProfile.partnerId || "",
+            }
+          : {
+              distributorUid: userProfile.uid,
+              distributorName: userProfile.name || auth.currentUser?.displayName || "Distributor",
+              distributorId: userProfile.distributorId || userProfile.partnerId || "",
+            }),
         region: userProfile.region,
         shopName: customer.shopName,
         phone: customer.phone,
@@ -1235,6 +1480,8 @@ export default function CrunzzoDistributorDashboard() {
         pincode: customer.pincode,
         subtotal,
         wholesaleDiscount,
+        retailerOfferDiscount,
+        discountTotal: wholesaleDiscount + retailerOfferDiscount,
         tax,
         total: totalSaleValue,
         totalUnits,
@@ -1252,6 +1499,9 @@ export default function CrunzzoDistributorDashboard() {
           rate: Number(item.rate || 0),
           rateLabel: `${formatRupees(item.rate)} / ${item.packLabel}`,
           gst: Number(item.gst || 0),
+          offerPercent: Number(item.offerPercent || 0),
+          lineDiscount: Number(item.lineDiscount || 0),
+          lineNetTotal: Number(item.lineNetTotal || item.lineTotal || 0),
           lineTotal: item.lineTotal,
           imageUrl: item.imageUrl || "",
         })),
@@ -1265,70 +1515,70 @@ export default function CrunzzoDistributorDashboard() {
         }),
       };
 
-      // Save the sale first so inventory permissions cannot block an order.
-      const savedRef = await addDoc(collection(db, "orders"), orderPayload);
       const regionId = getCrunzzoRegionId(userProfile.region);
+      const orderRef = doc(collection(db, "orders"));
 
-      if (regionId) {
-        const stockChanges = selectedItems.reduce((acc, item) => {
-          acc[item.productId] = (acc[item.productId] || 0) + Number(item.totalUnits);
-          return acc;
-        }, {});
-
-        try {
-          await runTransaction(db, async (transaction) => {
-            const stockSnapshots = {};
-
-            for (const productId of Object.keys(stockChanges)) {
-              const productRef = doc(db, "products", productId);
-              const allocationDocId = regionalInventory[productId]?.id || productId;
-              const allocationRef = doc(
-                db,
-                "regional_inventory",
-                regionId,
-                "products",
-                allocationDocId
-              );
-              stockSnapshots[productId] = {
-                product: await transaction.get(productRef),
-                allocation: await transaction.get(allocationRef),
-              };
-            }
-
-            for (const [productId, unitsToSubtract] of Object.entries(stockChanges)) {
-              const { product, allocation } = stockSnapshots[productId];
-              if (!product.exists() || !allocation.exists()) {
-                throw new Error(`Regional stock data is unavailable for product ${productId}.`);
-              }
-
-              const currentStock = Number(product.data().stock || 0);
-              const regionalStock = getRegionalRemainingUnits(allocation.data());
-              if (currentStock < unitsToSubtract || regionalStock < unitsToSubtract) {
-                throw new Error(`Regional stock changed before the sale could be synchronized.`);
-              }
-
-              transaction.update(product.ref, {
-                stock: currentStock - unitsToSubtract,
-                regionalStock: {
-                  ...(product.data().regionalStock || {}),
-                  [regionId]: regionalStock - unitsToSubtract,
-                },
-                updatedAtMs: Date.now(),
-              });
-              transaction.update(allocation.ref, {
-                fulfilledUnits: Number(allocation.data().fulfilledUnits || 0) + unitsToSubtract,
-                updatedAt: serverTimestamp(),
-                updatedAtMs: Date.now(),
-              });
-            }
-          });
-        } catch (stockError) {
-          console.warn("Regional stock sync skipped:", stockError.message);
-        }
+      if (!regionId) {
+        throw new Error("Your account does not have a valid Crunzzo region.");
       }
 
+      const stockChanges = selectedItems.reduce((acc, item) => {
+        acc[item.productId] = (acc[item.productId] || 0) + Number(item.totalUnits);
+        return acc;
+      }, {});
+
+      await runTransaction(db, async (transaction) => {
+        const stockSnapshots = {};
+
+        for (const productId of Object.keys(stockChanges)) {
+          const productRef = doc(db, "products", productId);
+          const allocationDocId = regionalInventory[productId]?.id || productId;
+          const allocationRef = doc(
+            db,
+            "regional_inventory",
+            regionId,
+            "products",
+            allocationDocId
+          );
+          stockSnapshots[productId] = {
+            product: await transaction.get(productRef),
+            allocation: await transaction.get(allocationRef),
+          };
+        }
+
+        for (const [productId, unitsToSubtract] of Object.entries(stockChanges)) {
+          const { product, allocation } = stockSnapshots[productId];
+          if (!product.exists() || !allocation.exists()) {
+            throw new Error(`Regional stock data is unavailable for product ${productId}.`);
+          }
+
+          const currentStock = Number(product.data().stock || 0);
+          const regionalStock = getRegionalRemainingUnits(allocation.data());
+          if (currentStock < unitsToSubtract || regionalStock < unitsToSubtract) {
+            throw new Error("Regional stock changed before the order could be synchronized.");
+          }
+
+          transaction.update(product.ref, {
+            stock: currentStock - unitsToSubtract,
+            regionalStock: {
+              ...(product.data().regionalStock || {}),
+              [regionId]: regionalStock - unitsToSubtract,
+            },
+            regionalStockUpdatedAtMs: Date.now(),
+            updatedAtMs: Date.now(),
+          });
+          transaction.update(allocation.ref, {
+            fulfilledUnits: Number(allocation.data().fulfilledUnits || 0) + unitsToSubtract,
+            updatedAt: serverTimestamp(),
+            updatedAtMs: Date.now(),
+          });
+        }
+
+        transaction.set(orderRef, orderPayload);
+      });
+
       setLastOrder({
-        id: savedRef.id,
+        id: orderRef.id,
         ...orderPayload,
       });
 
@@ -1424,7 +1674,7 @@ export default function CrunzzoDistributorDashboard() {
         <ThemeOverrides />
         <div className="bzd-shell bzd-shell-light">
           <div style={{ padding: "40px 0", textAlign: "center", color: "#7d879b" }}>
-            Loading Crunzzo distributor data...
+            Loading Crunzzo {roleLabel.toLowerCase()} data...
           </div>
         </div>
       </div>
@@ -1542,7 +1792,7 @@ export default function CrunzzoDistributorDashboard() {
                 color: "#20263a",
               }}
             >
-              {profileForm.name || "Distributor"}
+              {profileForm.name || roleFallbackName}
             </h2>
 
             <p
@@ -1553,7 +1803,7 @@ export default function CrunzzoDistributorDashboard() {
                 fontSize: 13,
               }}
             >
-              Sales Executive • {profileForm.territory || "North Region"}
+              {roleLabel} Partner • {profileForm.territory || "North Region"}
             </p>
 
             <div style={{ display: "flex", justifyContent: "center", marginTop: 14 }}>
@@ -1765,7 +2015,7 @@ export default function CrunzzoDistributorDashboard() {
               >
                 <div style={{ display: "flex", alignItems: "center", gap: 8, color: BRAND_ACCENT }}>
                   <span style={{ fontSize: 14 }}>▣</span>
-                  <small style={{ color: "#7d879b" }}>Total Sales</small>
+                  <small style={{ color: "#7d879b" }}>{isRetailer ? "Total Purchases" : "Total Sales"}</small>
                 </div>
                 <strong style={{ display: "block", marginTop: 8, fontSize: 18, color: "#20263a" }}>
                   {formatCompactRupees(todayRevenue)}
@@ -1808,8 +2058,8 @@ export default function CrunzzoDistributorDashboard() {
                 />
                 <ProfileMenuRow
                   icon="🧾"
-                  title="My Sales History"
-                  subtitle="Track your closed deals"
+                  title={isRetailer ? "My Purchase History" : "My Sales History"}
+                  subtitle={isRetailer ? "Track your completed purchases" : "Track your closed deals"}
                   onClick={() => goToScreen("history")}
                   accent={BRAND_ACCENT}
                 />
@@ -1877,7 +2127,7 @@ export default function CrunzzoDistributorDashboard() {
             <button type="button" className="bzd-back-btn" onClick={() => goToScreen("home")}>
               ←
             </button>
-            <h2>New Sale</h2>
+            <h2>New {transactionLabel}</h2>
             <span className="bzd-top-placeholder" />
           </div>
 
@@ -2058,7 +2308,11 @@ export default function CrunzzoDistributorDashboard() {
                   const regionalStockState = getRegionalStockState(product.id);
                   const totalAvailableUnits = regionalStockState.availableUnits;
                   const primaryPrice = packOptions.find((pack) => Number(pack.rate || 0) > 0)?.rate || 0;
-                  const isOutOfStock = totalAvailableUnits <= 0;
+                  const retailerOfferPercent = getRetailerOfferPercent(product);
+                  const hasOrderablePack = packOptions.some(
+                    (pack) => Math.floor(totalAvailableUnits / Math.max(1, Number(pack.packSize || 1))) > 0
+                  );
+                  const isOutOfStock = totalAvailableUnits <= 0 || !hasOrderablePack;
                   const isStockUnavailable = !regionalStockState.isAvailable;
                   const selectedPackCount = selectedItems
                     .filter((item) => item.productId === product.id)
@@ -2066,6 +2320,11 @@ export default function CrunzzoDistributorDashboard() {
 
                   return (
                     <div className="czd-product-card" key={product.id} style={{ opacity: isOutOfStock || isStockUnavailable ? 0.6 : 1 }}>
+                      {isRetailer && retailerOfferPercent > 0 ? (
+                        <div className="czd-offer-badge" aria-label={`${retailerOfferPercent}% offer`}>
+                          {retailerOfferPercent}%
+                        </div>
+                      ) : null}
                       <div className="czd-product-thumb">{renderProductVisual(product)}</div>
 
                       <div className="czd-product-meta">
@@ -2155,6 +2414,8 @@ export default function CrunzzoDistributorDashboard() {
                       unitsAvailableForThisPack / Math.max(1, Number(pack.packSize || 1))
                     );
                     const isPackOut = availableStock <= 0;
+                    const offerPercent = isRetailer ? getRetailerOfferPercent(selectedProductForPacksLive) : 0;
+                    const discountedRate = Number(pack.rate || 0) * (1 - offerPercent / 100);
 
                     return (
                       <div className="czd-option-row" key={pack.id}>
@@ -2164,9 +2425,11 @@ export default function CrunzzoDistributorDashboard() {
 
                         <div className="czd-option-info">
                           <span className="czd-option-label">{pack.label}</span>
-                          <span className="czd-option-price">{formatRupees(pack.rate)}</span>
+                          <span className="czd-option-price">
+                            {offerPercent > 0 ? `${formatRupees(discountedRate)} after offer` : formatRupees(pack.rate)}
+                          </span>
                           <small className={isPackOut ? "czd-option-stock is-out" : "czd-option-stock"}>
-                            GST {pack.gst}% • {isPackOut ? "OUT OF STOCK" : `${availableStock} packs in ${userProfile.region}`}
+                            GST {pack.gst}% • {offerPercent > 0 ? `${offerPercent}% off • ` : ""}{isPackOut ? "OUT OF STOCK" : `${availableStock} packs in ${userProfile.region}`}
                           </small>
                         </div>
 
@@ -2202,7 +2465,7 @@ export default function CrunzzoDistributorDashboard() {
                 <div className="czd-options-footer">
                   <div className="czd-options-footer-total">
                     <small>{totalUnits} ITEMS SELECTED</small>
-                    <strong>{formatRupees(subtotal)} Total</strong>
+                    <strong>{formatRupees(cartPreviewTotal)} Total</strong>
                   </div>
                   <button
                     type="button"
@@ -2239,7 +2502,7 @@ export default function CrunzzoDistributorDashboard() {
             >
               <div className="czd-review-total">
                 <small>{totalUnits} ITEMS SELECTED</small>
-                <strong>{formatRupees(subtotal)} Total</strong>
+                <strong>{formatRupees(cartPreviewTotal)} Total</strong>
               </div>
 
               <button
@@ -2299,7 +2562,7 @@ export default function CrunzzoDistributorDashboard() {
                     <small>{item.rateLabel}</small>
                   </div>
 
-                  <strong>{formatRupees(item.lineTotal)}</strong>
+                  <strong>{formatRupees(item.linePayable || item.lineTotal)}</strong>
                 </div>
               ))}
             </div>
@@ -2314,8 +2577,8 @@ export default function CrunzzoDistributorDashboard() {
                 <strong>{formatRupees(subtotal)}</strong>
               </div>
               <div>
-                <span>Wholesale Discount (5%)</span>
-                <strong className="green">-{formatRupees(wholesaleDiscount)}</strong>
+                <span>{isRetailer ? "Product Offers" : "Wholesale Discount (5%)"}</span>
+                <strong className="green">-{formatRupees(isRetailer ? retailerOfferDiscount : wholesaleDiscount)}</strong>
               </div>
               <div>
                 <span>GST</span>
@@ -2326,7 +2589,7 @@ export default function CrunzzoDistributorDashboard() {
 
           <div className="bzd-total-card">
             <div>
-              <small>TOTAL SALE VALUE</small>
+              <small>{isRetailer ? "TOTAL PURCHASE VALUE" : "TOTAL SALE VALUE"}</small>
               <strong>{formatRupees(totalSaleValue)}</strong>
             </div>
           </div>
@@ -2337,7 +2600,7 @@ export default function CrunzzoDistributorDashboard() {
             onClick={submitSale}
             disabled={submittingOrder}
           >
-            {submittingOrder ? "Submitting..." : "Submit Sale ▷"}
+            {submittingOrder ? "Submitting..." : `Submit ${transactionLabel} ▷`}
           </button>
         </div>
       </div>
@@ -2353,13 +2616,13 @@ export default function CrunzzoDistributorDashboard() {
             <button type="button" className="bzd-back-btn" onClick={() => goToScreen("home")}>
               ←
             </button>
-            <h2>Sale Confirmation</h2>
+            <h2>{transactionLabel} Confirmation</h2>
             <span className="bzd-top-placeholder" />
           </div>
 
           <div className="bzd-success-wrap">
             <div className="bzd-success-icon">✓</div>
-            <h1>Sale Recorded Successfully!</h1>
+            <h1>{transactionLabel} Recorded Successfully!</h1>
             <p>
               Your transaction has been processed and added to
               <br />
@@ -2409,7 +2672,7 @@ export default function CrunzzoDistributorDashboard() {
           </button>
 
           <button type="button" className="bzd-primary-btn" onClick={startNewSale}>
-            Log Another Sale
+            Log Another {transactionLabel}
           </button>
 
           <button type="button" className="bzd-secondary-btn" onClick={() => goToScreen("home")}>
@@ -2433,7 +2696,7 @@ export default function CrunzzoDistributorDashboard() {
               <button type="button" className="bzd-back-btn" onClick={() => goToScreen("home")}>
                 ←
               </button>
-              <h2>Daily Sales History</h2>
+              <h2>Daily {transactionLabel} History</h2>
               <span className="bzd-top-placeholder" />
             </div>
 
@@ -2478,7 +2741,7 @@ export default function CrunzzoDistributorDashboard() {
                   color: "#7d879b",
                 }}
               >
-                No sales recorded yet.
+                No {transactionNoun}s recorded yet.
               </div>
             ) : (
               <div className="bzd-history-list">
@@ -2505,6 +2768,121 @@ export default function CrunzzoDistributorDashboard() {
 
           <div style={{ flexShrink: 0, background: "#fff" }}>{renderMobileNav("history")}</div>
         </div>
+      </div>
+    );
+  }
+
+  if (screen === "notifications") {
+    return (
+      <div className="bzd-page" data-brand="crunzzo">
+        <ThemeOverrides />
+        <div
+          className="bzd-shell bzd-shell-light"
+          style={{ display: "flex", flexDirection: "column", minHeight: "100vh" }}
+        >
+          <div style={{ flex: 1, overflowY: "auto" }}>
+            <div className="bzd-topbar-step">
+              <button type="button" className="bzd-back-btn" onClick={() => goToScreen("home")}>
+                ←
+              </button>
+              <h2>Notifications</h2>
+              <span className="bzd-top-placeholder" />
+            </div>
+
+            <div className="czd-notification-title">
+              <h1>Regional Retailer Orders</h1>
+              <p>Retailer purchases from your region appear here.</p>
+            </div>
+
+            {notificationError ? (
+              <div className="czd-notification-error">
+                {notificationError}
+              </div>
+            ) : null}
+
+            <div className="czd-notification-list">
+              {prioritizedDistributorNotifications.length ? (
+                prioritizedDistributorNotifications.map((item) => {
+                  const isViewed = Boolean(viewedNotifications[item.id]);
+                  return (
+                    <button
+                      key={item.id}
+                      type="button"
+                      className={`czd-notification-card${isViewed ? " is-viewed" : ""}`}
+                      onClick={() => openDistributorNotification(item)}
+                      style={{ order: isViewed ? 2 : 1 }}
+                    >
+                      <span className="czd-notification-marker" style={{ background: isViewed ? "#cfd5df" : item.tone }} />
+                      <span className="czd-notification-copy">
+                        <span className="czd-notification-head">
+                          <strong>{item.title}</strong>
+                          <small>{item.time}</small>
+                        </span>
+                        <span className="czd-notification-message">{item.message}</span>
+                        <b className={`czd-notification-pill${isViewed ? " is-viewed" : ""}`}>
+                          {isViewed ? "Viewed" : "New"}
+                        </b>
+                      </span>
+                    </button>
+                  );
+                })
+              ) : (
+                <div className="bzd-empty-card">
+                  No regional retailer notifications yet.
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div style={{ flexShrink: 0, background: "#fff" }}>{renderMobileNav("home")}</div>
+        </div>
+
+        {selectedNotification ? (
+          <div
+            className="crz-logout-overlay"
+            role="presentation"
+            onClick={() => setSelectedNotification(null)}
+          >
+            <div
+              className="crz-logout-modal"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="distributor-notification-detail-title"
+              onClick={(event) => event.stopPropagation()}
+              style={{ textAlign: "left", maxWidth: 380 }}
+            >
+              <div
+                style={{
+                  width: 12,
+                  height: 44,
+                  borderRadius: 999,
+                  background: selectedNotification.tone,
+                  marginBottom: 12,
+                }}
+              />
+              <h3 id="distributor-notification-detail-title" style={{ marginBottom: 6 }}>
+                {selectedNotification.title}
+              </h3>
+              <p style={{ margin: "0 0 12px", color: "#7d879b", fontSize: 12 }}>
+                {selectedNotification.time}
+              </p>
+              <p style={{ margin: "0 0 12px", color: "#20263a", fontSize: 13, lineHeight: 1.45 }}>
+                {selectedNotification.message}
+              </p>
+              <div className="czd-notification-detail">
+                {selectedNotification.detail || selectedNotification.message}
+              </div>
+              <button
+                type="button"
+                className="crz-logout-confirm"
+                onClick={() => setSelectedNotification(null)}
+                style={{ width: "100%", marginTop: 14 }}
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        ) : null}
       </div>
     );
   }
@@ -2537,30 +2915,49 @@ export default function CrunzzoDistributorDashboard() {
               </button>
               <div>
                 <h3>Dashboard</h3>
-                <p>Welcome back, {(userProfile?.name || "Distributor").toUpperCase()}</p>
+                <p>Welcome back, {(userProfile?.name || roleFallbackName).toUpperCase()}</p>
               </div>
             </div>
 
             <div className="bzd-home-right">
+              <button
+                type="button"
+                className="bzd-bell-btn czd-notification-bell"
+                onClick={() => goToScreen("notifications")}
+                aria-label="Open notifications"
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9" />
+                  <path d="M10 21h4" />
+                </svg>
+                {unreadDistributorNotificationCount ? (
+                  <span className="czd-bell-badge">{unreadDistributorNotificationCount}</span>
+                ) : null}
+              </button>
               <button type="button" className="bzd-bell-btn">🔔</button>
               <img src={crunzzoLogo} alt="Crunzzo" className="bzd-header-logo" />
             </div>
           </div>
 
           <div className="bzd-hero-block">
-            <h1>Ready to sell?</h1>
+            {isRetailer ? (
+              <div className="czd-retailer-promo-ribbon">
+                buy 2 boxes and get 1 box free
+              </div>
+            ) : null}
+            <h1>Ready to {transactionVerb}?</h1>
             <p>Log a new transaction immediately.</p>
             <img src={crunzzoLogo} alt="Crunzzo" className="bzd-hero-logo" />
 
             <button type="button" className="bzd-primary-btn" onClick={startNewSale}>
-              ⊕ New Sale
+              ⊕ New {transactionLabel}
             </button>
           </div>
 
           <div className="bzd-sales-card">
             <div className="bzd-sales-head">
-              <h2>Sales Today</h2>
-              <span>{orders.length ? "Live data" : "No sales yet"}</span>
+              <h2>{transactionLabel}s Today</h2>
+              <span>{orders.length ? "Live data" : `No ${transactionNoun}s yet`}</span>
             </div>
 
             <div className="bzd-sales-grid">

@@ -5,6 +5,7 @@ import ChooseSectionPage from "./pages/ChooseSectionPage";
 import LoginPage from "./pages/LoginPage";
 
 import CrunzzoDistributorDashboard from "./pages/crunzzo/CrunzzoDistributorDashboard";
+import CrunzzoRetailerDashboard from "./pages/crunzzo/CrunzzoRetailerDashboard";
 import CrunzzoAdminDashboard from "./pages/crunzzo/CrunzzoAdminDashboard";
 import CrunzzoSuperStockistDashboard from "./pages/crunzzo/CrunzzoSuperStockistDashboard";
 
@@ -22,6 +23,7 @@ export default function App() {
       <Route path="/login" element={<LoginPage />} />
 
       <Route path="/crunzzo/distributor/:tab?" element={<CrunzzoDistributorDashboard />} />
+      <Route path="/crunzzo/retailer/:tab?" element={<CrunzzoRetailerDashboard />} />
       <Route path="/crunzzo/admin/:tab?" element={<CrunzzoAdminDashboard />} />
       <Route path="/crunzzo/super-stockist/:tab?" element={<CrunzzoSuperStockistDashboard />} />
 

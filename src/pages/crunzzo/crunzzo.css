@@ -153,6 +153,182 @@
   font-size: 14px;
 }
 
+.czd-retailer-promo-ribbon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 34px;
+  margin: 0 auto 12px;
+  padding: 0 18px;
+  border-radius: 999px;
+  background: #e51f28;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 900;
+  letter-spacing: 0;
+  text-transform: uppercase;
+  box-shadow: 0 10px 18px rgba(229, 31, 40, 0.18);
+}
+
+[data-brand="crunzzo"] .bzd-home-right > .bzd-bell-btn:not(.czd-notification-bell) {
+  display: none;
+}
+
+.czd-notification-bell {
+  position: relative;
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  background: #fff0f0;
+  color: #e51f28;
+}
+
+.czd-notification-bell svg {
+  width: 20px;
+  height: 20px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.czd-bell-badge {
+  position: absolute;
+  top: -5px;
+  right: -5px;
+  min-width: 17px;
+  height: 17px;
+  padding: 0 4px;
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+  background: #e51f28;
+  color: #fff;
+  border: 2px solid #fff;
+  font-size: 9px;
+  font-weight: 900;
+  line-height: 1;
+}
+
+.czd-notification-title {
+  margin: 18px 0 14px;
+}
+
+.czd-notification-title h1 {
+  margin: 0;
+  color: #20263a;
+  font-size: 20px;
+}
+
+.czd-notification-title p {
+  margin: 4px 0 0;
+  color: #7d879b;
+  font-size: 12px;
+}
+
+.czd-notification-error {
+  margin-bottom: 12px;
+  border: 1px solid #ffd1d1;
+  border-radius: 14px;
+  padding: 11px 12px;
+  background: #fff0f0;
+  color: #d42424;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.4;
+}
+
+.czd-notification-list {
+  display: grid;
+  gap: 12px;
+}
+
+.czd-notification-card {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 10px minmax(0, 1fr);
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid rgba(229, 31, 40, 0.36);
+  border-radius: 18px;
+  background: #fff;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  font-family: inherit;
+  box-shadow: 0 10px 24px rgba(32, 38, 58, 0.04);
+}
+
+.czd-notification-card.is-viewed {
+  opacity: 0.72;
+  border-color: #ececec;
+  box-shadow: none;
+}
+
+.czd-notification-marker {
+  width: 10px;
+  min-height: 52px;
+  border-radius: 999px;
+}
+
+.czd-notification-copy {
+  display: grid;
+  min-width: 0;
+}
+
+.czd-notification-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.czd-notification-head strong {
+  color: #20263a;
+  font-size: 14px;
+}
+
+.czd-notification-head small {
+  color: #7d879b;
+  font-size: 10px;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+.czd-notification-message {
+  margin-top: 5px;
+  color: #7d879b;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.czd-notification-pill {
+  justify-self: start;
+  margin-top: 9px;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: #fff0f0;
+  color: #e51f28;
+  font-size: 10px;
+  font-weight: 900;
+}
+
+.czd-notification-pill.is-viewed {
+  background: #f3f4f6;
+  color: #7d879b;
+}
+
+.czd-notification-detail {
+  padding: 12px;
+  border-radius: 12px;
+  background: #f7f8fb;
+  color: #20263a;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 .czd-hero-logo {
   width: 190px;
   height: auto;
@@ -665,6 +841,40 @@
   border: 1px solid #ececec;
   border-radius: 18px;
   padding: 12px;
+  position: relative;
+}
+
+.czd-offer-badge {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 2;
+  min-width: 46px;
+  height: 30px;
+  padding: 0 10px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(180deg, #ff3f3f 0%, #e51f28 100%);
+  color: #ffffff;
+  font-size: 14px;
+  font-weight: 900;
+  letter-spacing: 0;
+  box-shadow: 0 8px 18px rgba(229, 31, 40, 0.28);
+  animation: czd-offer-pulse 1s ease-in-out infinite;
+}
+
+@keyframes czd-offer-pulse {
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(1.08);
+    opacity: 0.72;
+  }
 }
 
 .czd-product-thumb {

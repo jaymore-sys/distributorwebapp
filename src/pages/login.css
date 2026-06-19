@@ -154,6 +154,37 @@
   box-shadow: 0 0 0 3px rgba(234, 42, 42, 0.08);
 }
 
+.crz-radio-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.crz-radio-option {
+  min-height: 46px;
+  border: 1px solid #d7dde8;
+  border-radius: 14px;
+  padding: 0 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #273043;
+  cursor: pointer;
+}
+
+.crz-radio-option input {
+  width: auto;
+  height: auto;
+  padding: 0;
+  margin: 0;
+  accent-color: #ea2a2a;
+}
+
+.crz-radio-option span {
+  font-size: 13px;
+  font-weight: 800;
+}
+
 .crz-password-row {
   display: flex;
   align-items: center;
@@ -222,57 +253,6 @@
 .crz-login-btn:disabled {
   opacity: 0.7;
   cursor: not-allowed;
-}
-
-.crz-divider {
-  position: relative;
-  text-align: center;
-  margin: 2px 0;
-}
-
-.crz-divider::before {
-  content: "";
-  position: absolute;
-  left: 0;
-  right: 0;
-  top: 50%;
-  height: 1px;
-  background: #e5e9f0;
-}
-
-.crz-divider span {
-  position: relative;
-  background: #ffffff;
-  padding: 0 10px;
-  color: #9aa3b2;
-  font-size: 12px;
-}
-
-.crz-social-stack {
-  display: grid;
-  gap: 10px;
-}
-
-.crz-social-btn {
-  width: 100%;
-  height: 44px;
-  border: 1px solid #d7dde8;
-  background: #ffffff;
-  border-radius: 14px;
-  color: #273043;
-  font-size: 13px;
-  font-weight: 700;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 10px;
-  cursor: pointer;
-}
-
-.crz-social-svg {
-  width: 19px;
-  height: 19px;
-  flex-shrink: 0;
 }
 
 .crz-bottom-switch {
