@@ -11,7 +11,12 @@ import {
 import { doc, getDoc, setDoc, serverTimestamp } from "firebase/firestore";
 
 import { getFirebaseServices, setSelectedBackend } from "../firebase";
-import { CRUNZZO_REGIONS, normalizeCrunzzoRegion } from "../utils/crunzzoRegions";
+import {
+  CRUNZZO_REGIONS,
+  getCrunzzoRegionId,
+  normalizeCrunzzoRegion,
+} from "../utils/crunzzoRegions";
+import { registerMobilePushToken } from "../utils/mobilePushNotifications";
 
 import valenciaLogo from "../assets/drink-valencia-logo.jpg";
 import bounceLogo from "../assets/9aaf616a1f05b52baba7f0d12dcc6600408fd0e3 (1).png";
@@ -103,6 +108,14 @@ function BackIcon() {
       <polyline points="15 18 9 12 15 6" />
     </svg>
   );
+}
+
+function getProfileRegionId(section, profile) {
+  if (section === "crunzzo") {
+    return getCrunzzoRegionId(profile?.region) || "";
+  }
+
+  return profile?.regionId || profile?.region || profile?.territory || "";
 }
 
 export default function LoginPage({ setUserProfile }) {
@@ -230,6 +243,15 @@ export default function LoginPage({ setUserProfile }) {
       if (setUserProfile) {
         setUserProfile(finalProfile);
       }
+
+      registerMobilePushToken({
+        uid: finalProfile.uid,
+        role: finalProfile.role,
+        section: selectedBrand.backend,
+        regionId: getProfileRegionId(selectedBrand.backend, finalProfile),
+      }).catch((pushError) => {
+        console.warn("Mobile push registration failed:", pushError);
+      });
 
       goByRole(finalProfile);
     } catch (err) {

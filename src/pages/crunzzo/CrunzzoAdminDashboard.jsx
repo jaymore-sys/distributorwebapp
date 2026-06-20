@@ -33,6 +33,14 @@ import {
   getCrunzzoUserRegion,
   getRegionalRemainingUnits,
 } from "../../utils/crunzzoRegions";
+import {
+  buildNotificationBody,
+  isAppNotificationViewed,
+  markAppNotificationViewed,
+  mergeAppNotifications,
+  subscribeToAppNotifications,
+  syncComputedAppNotifications,
+} from "../../utils/appNotifications";
 
 const { auth, db, storage } = getFirebaseServices("crunzzo");
 
@@ -365,6 +373,7 @@ export default function CrunzzoAdminDashboard() {
   const [viewedNotifications, setViewedNotifications] = useState(() =>
     readStoredIdMap(ADMIN_VIEWED_NOTIFICATIONS_KEY)
   );
+  const [remoteAdminNotifications, setRemoteAdminNotifications] = useState([]);
   const [selectedNotification, setSelectedNotification] = useState(null);
   const regionalProjectionSyncKeyRef = useRef("");
 
@@ -508,6 +517,21 @@ export default function CrunzzoAdminDashboard() {
       unsubAllocations.forEach((unsubscribe) => unsubscribe());
     };
   }, [navigate]);
+
+  useEffect(() => {
+    if (userProfile?.role !== "admin") {
+      setRemoteAdminNotifications([]);
+      return undefined;
+    }
+
+    return subscribeToAppNotifications({
+      db,
+      section: "crunzzo",
+      role: "admin",
+      uid: userProfile.uid,
+      onChange: setRemoteAdminNotifications,
+    });
+  }, [userProfile?.role, userProfile?.uid]);
 
   const totalSalesValue = useMemo(
     () => orders.reduce((sum, item) => sum + Number(item.total || 0), 0),
@@ -687,7 +711,7 @@ export default function CrunzzoAdminDashboard() {
       .sort((a, b) => b.totalValue - a.totalValue || b.orderCount - a.orderCount || b.totalUnits - a.totalUnits);
   }, [orders, retailerRegionFilter, users]);
 
-  const adminNotifications = useMemo(() => {
+  const computedAdminNotifications = useMemo(() => {
     const alerts = [];
 
     orders.slice(0, 8).forEach((order) => {
@@ -711,19 +735,37 @@ export default function CrunzzoAdminDashboard() {
             .join(", ")
         : "No item details saved";
 
-      alerts.push({
-        id: `order-${order.id}`,
-        tone: isRetailerOrder(order) ? "#b45309" : BRAND,
-        title: isRetailerOrder(order) ? "Retailer purchase recorded" : "Distributor sale recorded",
-        message: `${order.partnerName || order.retailerName || order.distributorName || order.shopName || "Partner"} • ${order.region || "No region"} • ${formatRupees(order.total || 0)}`,
-        detail: [
+      const id = `order-${order.id}`;
+      const title = isRetailerOrder(order) ? "Retailer purchase recorded" : "Distributor sale recorded";
+      const message = `${order.partnerName || order.retailerName || order.distributorName || order.shopName || "Partner"} • ${order.region || "No region"} • ${formatRupees(order.total || 0)}`;
+      const detail = buildNotificationBody([
           `Partner: ${partnerName}`,
           `Region: ${order.region || "No region"}`,
           `Total: ${formatRupees(order.total || 0)}`,
           `Units: ${totalUnits}`,
           `Items: ${itemSummary}`,
           order.invoiceNumber ? `Invoice: ${order.invoiceNumber}` : "",
-        ].filter(Boolean).join("\n"),
+        ]);
+
+      alerts.push({
+        id,
+        sourceId: id,
+        tone: isRetailerOrder(order) ? "#b45309" : BRAND,
+        section: "crunzzo",
+        type: "recent_order",
+        severity: "info",
+        title,
+        body: message,
+        message,
+        detail,
+        targetRoles: ["admin"],
+        entityType: "order",
+        entityId: order.id,
+        targetPath: "/crunzzo/admin/notifications",
+        targetTab: "notifications",
+        data: { detail, sourceId: id },
+        dedupeKey: `crunzzo:admin:recent_order:${order.id}`,
+        pushEnabled: true,
         time: formatTime(order.createdAtMs),
         createdAtMs: Number(order.createdAtMs || 0),
       });
@@ -731,18 +773,35 @@ export default function CrunzzoAdminDashboard() {
 
     products.filter((product) => isCrunzzoLowStock(product)).slice(0, 8).forEach((product) => {
       const totalUnits = getCrunzzoTotalUnits(product);
+      const id = `low-${product.id}`;
+      const message = `${product.name || "Product"} has ${getCrunzzoTotalUnits(product)} units left in admin stock.`;
+      const detail = [
+        `Product: ${product.name || "Product"}`,
+        `SKU: ${product.skuCode || "-"}`,
+        `Category: ${product.category || "-"}`,
+        `Central stock: ${totalUnits} units`,
+        `Low stock level: ${Number(product.lowStockThreshold || 0)} units`,
+      ].join("\n");
+
       alerts.push({
-        id: `low-${product.id}`,
+        id,
+        sourceId: id,
         tone: BRAND,
+        section: "crunzzo",
+        type: "low_central_stock",
+        severity: "danger",
         title: "Low central stock",
-        message: `${product.name || "Product"} has ${getCrunzzoTotalUnits(product)} units left in admin stock.`,
-        detail: [
-          `Product: ${product.name || "Product"}`,
-          `SKU: ${product.skuCode || "-"}`,
-          `Category: ${product.category || "-"}`,
-          `Central stock: ${totalUnits} units`,
-          `Low stock level: ${Number(product.lowStockThreshold || 0)} units`,
-        ].join("\n"),
+        body: message,
+        message,
+        detail,
+        targetRoles: ["admin"],
+        entityType: "product",
+        entityId: product.id,
+        targetPath: "/crunzzo/admin/notifications",
+        targetTab: "notifications",
+        data: { detail, sourceId: id },
+        dedupeKey: `crunzzo:admin:low_central_stock:${product.id}`,
+        pushEnabled: true,
         time: "Inventory",
         createdAtMs: Number(product.updatedAtMs || product.createdAtMs || 0),
       });
@@ -754,19 +813,36 @@ export default function CrunzzoAdminDashboard() {
         const remaining = getRegionalRemainingUnits(allocation);
         const minPack = getSmallestPackSize(product);
         if (remaining > 0 && remaining < minPack) {
+          const id = `pack-${region.id}-${allocation.productId || allocation.id}`;
+          const message = `${product.name || allocation.productName || "Product"} has ${remaining} units in ${region.name}, below the ${minPack}-unit pack.`;
+          const detail = [
+            `Product: ${product.name || allocation.productName || "Product"}`,
+            `SKU: ${product.skuCode || allocation.skuCode || "-"}`,
+            `Region: ${region.name}`,
+            `Remaining regional stock: ${remaining} units`,
+            `Smallest pack size: ${minPack} units`,
+            "Action: Allocate more units or wait until enough stock is available for a full pack.",
+          ].join("\n");
+
           alerts.push({
-            id: `pack-${region.id}-${allocation.productId || allocation.id}`,
+            id,
+            sourceId: id,
             tone: "#b45309",
+            section: "crunzzo",
+            type: "no_full_pack_available",
+            severity: "warning",
             title: "No full pack available",
-            message: `${product.name || allocation.productName || "Product"} has ${remaining} units in ${region.name}, below the ${minPack}-unit pack.`,
-            detail: [
-              `Product: ${product.name || allocation.productName || "Product"}`,
-              `SKU: ${product.skuCode || allocation.skuCode || "-"}`,
-              `Region: ${region.name}`,
-              `Remaining regional stock: ${remaining} units`,
-              `Smallest pack size: ${minPack} units`,
-              "Action: Allocate more units or wait until enough stock is available for a full pack.",
-            ].join("\n"),
+            body: message,
+            message,
+            detail,
+            targetRoles: ["admin"],
+            entityType: "regional_inventory",
+            entityId: allocation.productId || allocation.id,
+            targetPath: "/crunzzo/admin/notifications",
+            targetTab: "notifications",
+            data: { detail, sourceId: id, regionId: region.id },
+            dedupeKey: `crunzzo:admin:no_full_pack_available:${region.id}:${allocation.productId || allocation.id}`,
+            pushEnabled: true,
             time: region.name,
             createdAtMs: Number(allocation.updatedAtMs || 0),
           });
@@ -777,25 +853,44 @@ export default function CrunzzoAdminDashboard() {
     return alerts.sort((a, b) => b.createdAtMs - a.createdAtMs).slice(0, 20);
   }, [orders, productById, products, regionalAllocations]);
 
+  useEffect(() => {
+    if (userProfile?.role !== "admin") return;
+    syncComputedAppNotifications(db, computedAdminNotifications);
+  }, [computedAdminNotifications, userProfile?.role]);
+
+  const adminNotifications = useMemo(
+    () => mergeAppNotifications(remoteAdminNotifications, computedAdminNotifications).slice(0, 20),
+    [computedAdminNotifications, remoteAdminNotifications]
+  );
+
   const maxRetailerValue = retailerRankings[0]?.totalValue || 1;
   const unreadAdminNotificationCount = adminNotifications.filter(
-    (item) => !viewedNotifications[item.id]
+    (item) => !isAppNotificationViewed(item, userProfile?.uid, viewedNotifications)
   ).length;
   const prioritizedAdminNotifications = useMemo(() => {
     const unread = [];
     const viewed = [];
     adminNotifications.forEach((item) => {
-      if (viewedNotifications[item.id]) viewed.push(item);
+      if (isAppNotificationViewed(item, userProfile?.uid, viewedNotifications)) viewed.push(item);
       else unread.push(item);
     });
     return [...unread, ...viewed];
-  }, [adminNotifications, viewedNotifications]);
+  }, [adminNotifications, userProfile?.uid, viewedNotifications]);
 
   const openAdminNotification = (item) => {
     setSelectedNotification(item);
+    markAppNotificationViewed(db, item, userProfile?.uid).catch((error) => {
+      console.warn("Failed to mark admin notification read:", error);
+    });
     setViewedNotifications((previous) => {
-      if (previous[item.id]) return previous;
-      const next = { ...previous, [item.id]: Date.now() };
+      if (previous[item.id] || previous[item.sourceId]) return previous;
+      const viewedAt = Date.now();
+      const next = {
+        ...previous,
+        [item.id]: viewedAt,
+        ...(item.sourceId ? { [item.sourceId]: viewedAt } : {}),
+        ...(item.dedupeKey ? { [item.dedupeKey]: viewedAt } : {}),
+      };
       saveStoredIdMap(ADMIN_VIEWED_NOTIFICATIONS_KEY, next);
       return next;
     });
@@ -2127,7 +2222,7 @@ export default function CrunzzoAdminDashboard() {
               <div style={{ display: "grid", gap: 12 }}>
                 {prioritizedAdminNotifications.length ? (
                   prioritizedAdminNotifications.map((item) => {
-                    const isViewed = Boolean(viewedNotifications[item.id]);
+                    const isViewed = isAppNotificationViewed(item, userProfile?.uid, viewedNotifications);
                     return (
                       <button
                         key={item.id}

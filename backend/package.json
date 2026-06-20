@@ -1,0 +1,13 @@
+{
+  "name": "distributorwebapp-backend-notifications",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "express": "^5.2.1",
+    "firebase-admin": "^13.6.0"
+  },
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  }
+}

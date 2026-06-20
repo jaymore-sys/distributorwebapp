@@ -23,6 +23,15 @@ import {
   getCrunzzoUserRegion,
   getRegionalRemainingUnits,
 } from "../../utils/crunzzoRegions";
+import {
+  buildNotificationBody,
+  createAppNotification,
+  isAppNotificationViewed,
+  markAppNotificationViewed,
+  mergeAppNotifications,
+  subscribeToAppNotifications,
+  syncComputedAppNotifications,
+} from "../../utils/appNotifications";
 import "./crunzzo.css";
 
 const { auth, db, storage } = getFirebaseServices("crunzzo");
@@ -663,6 +672,7 @@ export default function CrunzzoDistributorDashboard({ accountType = "distributor
   const [viewedNotifications, setViewedNotifications] = useState(() =>
     readStoredIdMap(DISTRIBUTOR_VIEWED_NOTIFICATIONS_KEY)
   );
+  const [remoteDistributorNotifications, setRemoteDistributorNotifications] = useState([]);
   const [selectedNotification, setSelectedNotification] = useState(null);
   const [lastOrder, setLastOrder] = useState(null);
 
@@ -869,6 +879,24 @@ export default function CrunzzoDistributorDashboard({ accountType = "distributor
   }, [isRetailer, navigate]);
 
   useEffect(() => {
+    const role = userProfile?.role || dashboardMode;
+    const regionId = getCrunzzoRegionId(userProfile?.region);
+    if (!userProfile?.uid || !role) {
+      setRemoteDistributorNotifications([]);
+      return undefined;
+    }
+
+    return subscribeToAppNotifications({
+      db,
+      section: "crunzzo",
+      role,
+      uid: userProfile.uid,
+      regionId,
+      onChange: setRemoteDistributorNotifications,
+    });
+  }, [dashboardMode, userProfile?.region, userProfile?.role, userProfile?.uid]);
+
+  useEffect(() => {
     const regionId = getCrunzzoRegionId(userProfile?.region);
     if (!userProfile?.uid || !regionId) return undefined;
     if (!products.length) {
@@ -1059,50 +1087,89 @@ export default function CrunzzoDistributorDashboard({ accountType = "distributor
   }, [filteredOrders]);
 
   const recentActivity = orders.slice(0, 3);
-  const distributorNotifications = useMemo(() => {
+  const computedDistributorNotifications = useMemo(() => {
     if (isRetailer) return [];
+    const regionId = getCrunzzoRegionId(userProfile?.region);
 
     return regionalNotificationOrders.slice(0, 30).map((order) => {
       const partnerName = getOrderPartnerName(order);
       const totalUnits = getOrderUnits(order);
       const itemSummary = getOrderItemsSummary(order);
+      const id = `retailer-order-${order.id}`;
+      const message = `${partnerName} • ${order.region || userProfile?.region || "No region"} • ${formatRupees(order.total || 0)}`;
+      const detail = buildNotificationBody([
+        `Retailer: ${partnerName}`,
+        `Region: ${order.region || userProfile?.region || "No region"}`,
+        `Total: ${formatRupees(order.total || 0)}`,
+        `Units: ${totalUnits}`,
+        `Items: ${itemSummary}`,
+        order.invoiceNumber ? `Invoice: ${order.invoiceNumber}` : "",
+      ]);
+
       return {
-        id: `retailer-order-${order.id}`,
+        id,
+        sourceId: id,
         tone: "#b45309",
+        section: "crunzzo",
+        type: "regional_retailer_purchase",
+        severity: "info",
         title: "Retailer purchase in your region",
-        message: `${partnerName} • ${order.region || userProfile?.region || "No region"} • ${formatRupees(order.total || 0)}`,
-        detail: [
-          `Retailer: ${partnerName}`,
-          `Region: ${order.region || userProfile?.region || "No region"}`,
-          `Total: ${formatRupees(order.total || 0)}`,
-          `Units: ${totalUnits}`,
-          `Items: ${itemSummary}`,
-          order.invoiceNumber ? `Invoice: ${order.invoiceNumber}` : "",
-        ].filter(Boolean).join("\n"),
+        body: message,
+        message,
+        detail,
+        targetRoles: ["distributor"],
+        regionId,
+        entityType: "order",
+        entityId: order.id,
+        targetPath: "/crunzzo/distributor/notifications",
+        targetTab: "notifications",
+        data: { detail, sourceId: id },
+        dedupeKey: `crunzzo:distributor:regional_retailer_purchase:${order.id}`,
+        pushEnabled: true,
         time: formatNotificationTime(order.createdAtMs),
         createdAtMs: Number(order.createdAtMs || 0),
       };
     });
   }, [isRetailer, regionalNotificationOrders, userProfile?.region]);
 
+  useEffect(() => {
+    if (isRetailer || userProfile?.role !== "distributor") return;
+    syncComputedAppNotifications(db, computedDistributorNotifications);
+  }, [computedDistributorNotifications, isRetailer, userProfile?.role]);
+
+  const distributorNotifications = useMemo(
+    () =>
+      mergeAppNotifications(remoteDistributorNotifications, computedDistributorNotifications).slice(0, 30),
+    [computedDistributorNotifications, remoteDistributorNotifications]
+  );
+
   const unreadDistributorNotificationCount = distributorNotifications.filter(
-    (item) => !viewedNotifications[item.id]
+    (item) => !isAppNotificationViewed(item, userProfile?.uid, viewedNotifications)
   ).length;
   const prioritizedDistributorNotifications = useMemo(() => {
     const unread = [];
     const viewed = [];
     distributorNotifications.forEach((item) => {
-      if (viewedNotifications[item.id]) viewed.push(item);
+      if (isAppNotificationViewed(item, userProfile?.uid, viewedNotifications)) viewed.push(item);
       else unread.push(item);
     });
     return [...unread, ...viewed];
-  }, [distributorNotifications, viewedNotifications]);
+  }, [distributorNotifications, userProfile?.uid, viewedNotifications]);
 
   const openDistributorNotification = (item) => {
     setSelectedNotification(item);
+    markAppNotificationViewed(db, item, userProfile?.uid).catch((error) => {
+      console.warn("Failed to mark distributor notification read:", error);
+    });
     setViewedNotifications((previous) => {
-      if (previous[item.id]) return previous;
-      const next = { ...previous, [item.id]: Date.now() };
+      if (previous[item.id] || previous[item.sourceId]) return previous;
+      const viewedAt = Date.now();
+      const next = {
+        ...previous,
+        [item.id]: viewedAt,
+        ...(item.sourceId ? { [item.sourceId]: viewedAt } : {}),
+        ...(item.dedupeKey ? { [item.dedupeKey]: viewedAt } : {}),
+      };
       saveStoredIdMap(DISTRIBUTOR_VIEWED_NOTIFICATIONS_KEY, next);
       return next;
     });
@@ -1422,6 +1489,89 @@ export default function CrunzzoDistributorDashboard({ accountType = "distributor
     }),
   });
 
+  const sendOrderNotifications = async (orderId, orderPayload, regionId) => {
+    const partnerName = getOrderPartnerName(orderPayload);
+    const itemSummary = getOrderItemsSummary(orderPayload);
+    const totalLabel = formatRupees(orderPayload.total || 0);
+    const detail = buildNotificationBody([
+      `Partner: ${partnerName}`,
+      `Region: ${orderPayload.region || userProfile?.region || "No region"}`,
+      `Total: ${totalLabel}`,
+      `Units: ${orderPayload.totalUnits || 0}`,
+      `Items: ${itemSummary}`,
+      orderPayload.invoiceNumber ? `Invoice: ${orderPayload.invoiceNumber}` : "",
+    ]);
+    const orderType = isRetailer ? "regional_retailer_purchase" : "regional_distributor_sale";
+    const regionalTitle = isRetailer
+      ? "Retailer purchase in your region"
+      : "Distributor sale in your region";
+    const regionalBody = `${partnerName} • ${totalLabel}`;
+    const base = {
+      section: "crunzzo",
+      severity: "info",
+      entityType: "order",
+      entityId: orderId,
+      createdAtMs: orderPayload.createdAtMs,
+      pushEnabled: true,
+    };
+
+    const notifications = [
+      {
+        ...base,
+        type: "recent_order",
+        title: isRetailer ? "Retailer purchase recorded" : "Distributor sale recorded",
+        body: `${partnerName} • ${orderPayload.region || "No region"} • ${totalLabel}`,
+        targetRoles: ["admin"],
+        targetPath: "/crunzzo/admin/notifications",
+        targetTab: "notifications",
+        data: { detail, sourceId: `order-${orderId}` },
+        sourceId: `order-${orderId}`,
+        detail,
+        dedupeKey: `crunzzo:admin:recent_order:${orderId}`,
+      },
+      {
+        ...base,
+        type: orderType,
+        title: regionalTitle,
+        body: regionalBody,
+        targetRoles: ["super_stockist"],
+        regionId,
+        targetPath: "/crunzzo/super-stockist/notifications",
+        targetTab: "notifications",
+        data: { detail, sourceId: `order-${orderId}` },
+        sourceId: `order-${orderId}`,
+        detail,
+        dedupeKey: `crunzzo:super_stockist:${orderType}:${orderId}`,
+      },
+    ];
+
+    if (isRetailer) {
+      const distributorDetail = detail.replace(/^Partner:/, "Retailer:");
+      notifications.push({
+        ...base,
+        type: "regional_retailer_purchase",
+        title: "Retailer purchase in your region",
+        body: `${partnerName} • ${orderPayload.region || "No region"} • ${totalLabel}`,
+        targetRoles: ["distributor"],
+        regionId,
+        targetPath: "/crunzzo/distributor/notifications",
+        targetTab: "notifications",
+        data: { detail: distributorDetail, sourceId: `retailer-order-${orderId}` },
+        sourceId: `retailer-order-${orderId}`,
+        detail: distributorDetail,
+        dedupeKey: `crunzzo:distributor:regional_retailer_purchase:${orderId}`,
+      });
+    }
+
+    const results = await Promise.allSettled(
+      notifications.map((notification) => createAppNotification(notification, { db }))
+    );
+    const rejected = results.find((result) => result.status === "rejected");
+    if (rejected) {
+      console.warn("One or more order notifications could not be sent:", rejected.reason);
+    }
+  };
+
   const handleDownloadCurrentInvoice = () => {
     if (!selectedItems.length) {
       alert("Please add items first.");
@@ -1576,6 +1726,8 @@ export default function CrunzzoDistributorDashboard({ accountType = "distributor
 
         transaction.set(orderRef, orderPayload);
       });
+
+      await sendOrderNotifications(orderRef.id, orderPayload, regionId);
 
       setLastOrder({
         id: orderRef.id,
@@ -2803,7 +2955,7 @@ export default function CrunzzoDistributorDashboard({ accountType = "distributor
             <div className="czd-notification-list">
               {prioritizedDistributorNotifications.length ? (
                 prioritizedDistributorNotifications.map((item) => {
-                  const isViewed = Boolean(viewedNotifications[item.id]);
+                  const isViewed = isAppNotificationViewed(item, userProfile?.uid, viewedNotifications);
                   return (
                     <button
                       key={item.id}

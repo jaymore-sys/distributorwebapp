@@ -19,6 +19,14 @@ import {
   getCrunzzoUserRegion,
   getRegionalRemainingUnits,
 } from "../../utils/crunzzoRegions";
+import {
+  buildNotificationBody,
+  isAppNotificationViewed,
+  markAppNotificationViewed,
+  mergeAppNotifications,
+  subscribeToAppNotifications,
+  syncComputedAppNotifications,
+} from "../../utils/appNotifications";
 import "./crunzzo-super-stockist.css";
 
 const { auth, db, storage } = getFirebaseServices("crunzzo");
@@ -153,6 +161,7 @@ export default function CrunzzoSuperStockistDashboard() {
   const [viewedNotifications, setViewedNotifications] = useState(() =>
     readStoredIdMap(STOCKIST_VIEWED_NOTIFICATIONS_KEY)
   );
+  const [remoteStockistNotifications, setRemoteStockistNotifications] = useState([]);
   const [selectedNotification, setSelectedNotification] = useState(null);
 
   const goToTab = usePortalHistoryManager({
@@ -271,6 +280,23 @@ export default function CrunzzoSuperStockistDashboard() {
     };
   }, [navigate]);
 
+  useEffect(() => {
+    const regionId = getCrunzzoRegionId(userProfile?.region);
+    if (userProfile?.role !== "super_stockist" || !regionId) {
+      setRemoteStockistNotifications([]);
+      return undefined;
+    }
+
+    return subscribeToAppNotifications({
+      db,
+      section: "crunzzo",
+      role: "super_stockist",
+      uid: userProfile.uid,
+      regionId,
+      onChange: setRemoteStockistNotifications,
+    });
+  }, [userProfile?.region, userProfile?.role, userProfile?.uid]);
+
   const productMap = useMemo(
     () => Object.fromEntries(products.map((product) => [product.id, product])),
     [products]
@@ -328,27 +354,47 @@ export default function CrunzzoSuperStockistDashboard() {
     0
   );
 
-  const stockistNotifications = useMemo(() => {
+  const computedStockistNotifications = useMemo(() => {
     const alerts = [];
+    const regionId = getCrunzzoRegionId(userProfile?.region);
 
     orders.slice(0, 8).forEach((order) => {
       const partnerName = getOrderPartnerName(order);
       const totalUnits = getOrderUnits(order);
       const itemSummary = getOrderItemsSummary(order);
+      const isRetailerPurchase = order.orderType === "retailer_purchase";
+      const id = `order-${order.id}`;
+      const title = isRetailerPurchase ? "Retailer purchase in your region" : "Distributor sale in your region";
+      const message = `${order.partnerName || order.retailerName || order.distributorName || order.shopName || "Partner"} • ${formatRupees(order.total || 0)}`;
+      const detail = buildNotificationBody([
+        `Partner: ${partnerName}`,
+        `Region: ${order.region || userProfile?.region || "No region"}`,
+        `Total: ${formatRupees(order.total || 0)}`,
+        `Units: ${totalUnits}`,
+        `Items: ${itemSummary}`,
+        order.invoiceNumber ? `Invoice: ${order.invoiceNumber}` : "",
+      ]);
 
       alerts.push({
-        id: `order-${order.id}`,
-        tone: order.orderType === "retailer_purchase" ? "#b45309" : "#e51f28",
-        title: order.orderType === "retailer_purchase" ? "Retailer purchase in your region" : "Distributor sale in your region",
-        message: `${order.partnerName || order.retailerName || order.distributorName || order.shopName || "Partner"} • ${formatRupees(order.total || 0)}`,
-        detail: [
-          `Partner: ${partnerName}`,
-          `Region: ${order.region || userProfile?.region || "No region"}`,
-          `Total: ${formatRupees(order.total || 0)}`,
-          `Units: ${totalUnits}`,
-          `Items: ${itemSummary}`,
-          order.invoiceNumber ? `Invoice: ${order.invoiceNumber}` : "",
-        ].filter(Boolean).join("\n"),
+        id,
+        sourceId: id,
+        tone: isRetailerPurchase ? "#b45309" : "#e51f28",
+        section: "crunzzo",
+        type: isRetailerPurchase ? "regional_retailer_purchase" : "regional_distributor_sale",
+        severity: "info",
+        title,
+        body: message,
+        message,
+        detail,
+        targetRoles: ["super_stockist"],
+        regionId,
+        entityType: "order",
+        entityId: order.id,
+        targetPath: "/crunzzo/super-stockist/notifications",
+        targetTab: "notifications",
+        data: { detail, sourceId: id },
+        dedupeKey: `crunzzo:super_stockist:${isRetailerPurchase ? "regional_retailer_purchase" : "regional_distributor_sale"}:${order.id}`,
+        pushEnabled: true,
         time: formatTime(order.createdAtMs),
         createdAtMs: Number(order.createdAtMs || 0),
       });
@@ -359,19 +405,37 @@ export default function CrunzzoSuperStockistDashboard() {
       const remaining = getRegionalRemainingUnits(allocation);
       const minPack = getSmallestPackSize(product);
       if (remaining > 0 && remaining < minPack) {
+        const id = `pack-${allocation.id}`;
+        const message = `${product.name || allocation.productName || "Product"} has ${remaining} units left, below the ${minPack}-unit pack.`;
+        const detail = [
+          `Product: ${product.name || allocation.productName || "Product"}`,
+          `SKU: ${product.skuCode || allocation.skuCode || "-"}`,
+          `Region: ${userProfile?.region || "Your region"}`,
+          `Remaining regional stock: ${remaining} units`,
+          `Smallest pack size: ${minPack} units`,
+          "Action: Ask admin to allocate more units before partners can order this SKU.",
+        ].join("\n");
+
         alerts.push({
-          id: `pack-${allocation.id}`,
+          id,
+          sourceId: id,
           tone: "#b45309",
+          section: "crunzzo",
+          type: "no_full_pack_available",
+          severity: "warning",
           title: "No full pack available",
-          message: `${product.name || allocation.productName || "Product"} has ${remaining} units left, below the ${minPack}-unit pack.`,
-          detail: [
-            `Product: ${product.name || allocation.productName || "Product"}`,
-            `SKU: ${product.skuCode || allocation.skuCode || "-"}`,
-            `Region: ${userProfile?.region || "Your region"}`,
-            `Remaining regional stock: ${remaining} units`,
-            `Smallest pack size: ${minPack} units`,
-            "Action: Ask admin to allocate more units before partners can order this SKU.",
-          ].join("\n"),
+          body: message,
+          message,
+          detail,
+          targetRoles: ["super_stockist"],
+          regionId,
+          entityType: "regional_inventory",
+          entityId: allocation.productId || allocation.id,
+          targetPath: "/crunzzo/super-stockist/notifications",
+          targetTab: "notifications",
+          data: { detail, sourceId: id },
+          dedupeKey: `crunzzo:super_stockist:no_full_pack_available:${regionId}:${allocation.productId || allocation.id}`,
+          pushEnabled: true,
           time: "Inventory",
           createdAtMs: Number(allocation.updatedAtMs || 0),
         });
@@ -381,24 +445,43 @@ export default function CrunzzoSuperStockistDashboard() {
     return alerts.sort((a, b) => b.createdAtMs - a.createdAtMs).slice(0, 20);
   }, [orders, userProfile?.region, visibleAllocations]);
 
+  useEffect(() => {
+    if (userProfile?.role !== "super_stockist") return;
+    syncComputedAppNotifications(db, computedStockistNotifications);
+  }, [computedStockistNotifications, userProfile?.role]);
+
+  const stockistNotifications = useMemo(
+    () => mergeAppNotifications(remoteStockistNotifications, computedStockistNotifications).slice(0, 20),
+    [computedStockistNotifications, remoteStockistNotifications]
+  );
+
   const unreadStockistNotificationCount = stockistNotifications.filter(
-    (item) => !viewedNotifications[item.id]
+    (item) => !isAppNotificationViewed(item, userProfile?.uid, viewedNotifications)
   ).length;
   const prioritizedStockistNotifications = useMemo(() => {
     const unread = [];
     const viewed = [];
     stockistNotifications.forEach((item) => {
-      if (viewedNotifications[item.id]) viewed.push(item);
+      if (isAppNotificationViewed(item, userProfile?.uid, viewedNotifications)) viewed.push(item);
       else unread.push(item);
     });
     return [...unread, ...viewed];
-  }, [stockistNotifications, viewedNotifications]);
+  }, [stockistNotifications, userProfile?.uid, viewedNotifications]);
 
   const openStockistNotification = (item) => {
     setSelectedNotification(item);
+    markAppNotificationViewed(db, item, userProfile?.uid).catch((error) => {
+      console.warn("Failed to mark stockist notification read:", error);
+    });
     setViewedNotifications((previous) => {
-      if (previous[item.id]) return previous;
-      const next = { ...previous, [item.id]: Date.now() };
+      if (previous[item.id] || previous[item.sourceId]) return previous;
+      const viewedAt = Date.now();
+      const next = {
+        ...previous,
+        [item.id]: viewedAt,
+        ...(item.sourceId ? { [item.sourceId]: viewedAt } : {}),
+        ...(item.dedupeKey ? { [item.dedupeKey]: viewedAt } : {}),
+      };
       saveStoredIdMap(STOCKIST_VIEWED_NOTIFICATIONS_KEY, next);
       return next;
     });
@@ -681,7 +764,7 @@ export default function CrunzzoSuperStockistDashboard() {
               <div className="css-title-block"><h1>Notifications</h1><p>Regional order and stock alerts.</p></div>
               <div className="css-list">
                 {prioritizedStockistNotifications.length ? prioritizedStockistNotifications.map((item) => {
-                  const isViewed = Boolean(viewedNotifications[item.id]);
+                  const isViewed = isAppNotificationViewed(item, userProfile?.uid, viewedNotifications);
                   return (
                     <button
                       key={item.id}

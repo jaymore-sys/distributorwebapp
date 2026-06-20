@@ -4,3 +4,10 @@ dist/
 .DS_Store
 *.local
 .vscode/
+backend/secrets/
+.env
+.env.*
+backend/.env
+backend/.env.*
+!.env.example
+!backend/.env.example
