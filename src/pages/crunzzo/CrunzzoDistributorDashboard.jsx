@@ -9,6 +9,7 @@ import {
   query,
   runTransaction,
   serverTimestamp,
+  setDoc,
   updateDoc,
   where,
 } from "firebase/firestore";
@@ -32,6 +33,7 @@ import {
   subscribeToAppNotifications,
   syncComputedAppNotifications,
 } from "../../utils/appNotifications";
+import { deductStockBatches } from "../../utils/crunzzoStockBatches";
 import "./crunzzo.css";
 
 const { auth, db, storage } = getFirebaseServices("crunzzo");
@@ -74,6 +76,17 @@ function isValidTaxId(value) {
   const isGst = /^\d{2}[A-Z]{5}\d{4}[A-Z][A-Z0-9]Z[A-Z0-9]$/.test(val);
   const isPan = /^[A-Z]{5}\d{4}[A-Z]$/.test(val);
   return isGst || isPan;
+}
+
+function isFirestorePermissionDenied(error) {
+  const code = String(error?.code || "").toLowerCase();
+  const message = String(error?.message || "").toLowerCase();
+  return (
+    code === "permission-denied" ||
+    code === "permission_denied" ||
+    message.includes("missing or insufficient permissions") ||
+    message.includes("permission-denied")
+  );
 }
 
 function getAvatarBg(index) {
@@ -364,6 +377,17 @@ function getOrderPartnerName(order) {
     order?.distributorName ||
     order?.shopName ||
     "Partner"
+  );
+}
+
+function getOrderPurchaserName(order) {
+  return (
+    order?.shopName ||
+    order?.customerName ||
+    order?.buyerName ||
+    order?.storeName ||
+    order?.businessName ||
+    getOrderPartnerName(order)
   );
 }
 
@@ -816,7 +840,11 @@ export default function CrunzzoDistributorDashboard({ accountType = "distributor
 
         if (!isRetailer && region) {
           unsubscribeRegionalNotifications = onSnapshot(
-            query(collection(db, "orders"), where("region", "==", region)),
+            query(
+              collection(db, "orders"),
+              where("region", "==", region),
+              where("orderType", "==", "retailer_purchase")
+            ),
             (snapshot) => {
               const rows = snapshot.docs
                 .map((docSnap) => ({
@@ -1093,12 +1121,14 @@ export default function CrunzzoDistributorDashboard({ accountType = "distributor
 
     return regionalNotificationOrders.slice(0, 30).map((order) => {
       const partnerName = getOrderPartnerName(order);
+      const purchaserName = getOrderPurchaserName(order);
       const totalUnits = getOrderUnits(order);
       const itemSummary = getOrderItemsSummary(order);
       const id = `retailer-order-${order.id}`;
-      const message = `${partnerName} • ${order.region || userProfile?.region || "No region"} • ${formatRupees(order.total || 0)}`;
+      const message = [purchaserName, order.region || userProfile?.region || "No region", formatRupees(order.total || 0)].join(" - ");
       const detail = buildNotificationBody([
-        `Retailer: ${partnerName}`,
+        `Purchased by: ${purchaserName}`,
+        partnerName !== purchaserName ? `Retailer account: ${partnerName}` : "",
         `Region: ${order.region || userProfile?.region || "No region"}`,
         `Total: ${formatRupees(order.total || 0)}`,
         `Units: ${totalUnits}`,
@@ -1113,7 +1143,7 @@ export default function CrunzzoDistributorDashboard({ accountType = "distributor
         section: "crunzzo",
         type: "regional_retailer_purchase",
         severity: "info",
-        title: "Retailer purchase in your region",
+        title: `Retailer purchase: ${purchaserName}`,
         body: message,
         message,
         detail,
@@ -1677,61 +1707,79 @@ export default function CrunzzoDistributorDashboard({ accountType = "distributor
         return acc;
       }, {});
 
-      await runTransaction(db, async (transaction) => {
-        const stockSnapshots = {};
+      let inventorySynced = true;
 
-        for (const productId of Object.keys(stockChanges)) {
-          const productRef = doc(db, "products", productId);
-          const allocationDocId = regionalInventory[productId]?.id || productId;
-          const allocationRef = doc(
-            db,
-            "regional_inventory",
-            regionId,
-            "products",
-            allocationDocId
-          );
-          stockSnapshots[productId] = {
-            product: await transaction.get(productRef),
-            allocation: await transaction.get(allocationRef),
-          };
-        }
+      try {
+        await runTransaction(db, async (transaction) => {
+          const stockSnapshots = {};
 
-        for (const [productId, unitsToSubtract] of Object.entries(stockChanges)) {
-          const { product, allocation } = stockSnapshots[productId];
-          if (!product.exists() || !allocation.exists()) {
-            throw new Error(`Regional stock data is unavailable for product ${productId}.`);
+          for (const productId of Object.keys(stockChanges)) {
+            const productRef = doc(db, "products", productId);
+            const allocationDocId = regionalInventory[productId]?.id || productId;
+            const allocationRef = doc(
+              db,
+              "regional_inventory",
+              regionId,
+              "products",
+              allocationDocId
+            );
+            stockSnapshots[productId] = {
+              product: await transaction.get(productRef),
+              allocation: await transaction.get(allocationRef),
+            };
           }
 
-          const currentStock = Number(product.data().stock || 0);
-          const regionalStock = getRegionalRemainingUnits(allocation.data());
-          if (currentStock < unitsToSubtract || regionalStock < unitsToSubtract) {
-            throw new Error("Regional stock changed before the order could be synchronized.");
+          for (const [productId, unitsToSubtract] of Object.entries(stockChanges)) {
+            const { product, allocation } = stockSnapshots[productId];
+            if (!product.exists() || !allocation.exists()) {
+              throw new Error(`Regional stock data is unavailable for product ${productId}.`);
+            }
+
+            const productData = product.data();
+            const currentStock = Number(productData.stock || 0);
+            const regionalStock = getRegionalRemainingUnits(allocation.data());
+            if (currentStock < unitsToSubtract || regionalStock < unitsToSubtract) {
+              throw new Error("Regional stock changed before the order could be synchronized.");
+            }
+
+            transaction.update(product.ref, {
+              stock: currentStock - unitsToSubtract,
+              regionalStock: {
+                ...(productData.regionalStock || {}),
+                [regionId]: regionalStock - unitsToSubtract,
+              },
+              stockBatches: deductStockBatches(productData.stockBatches || [], unitsToSubtract),
+              regionalStockUpdatedAtMs: Date.now(),
+              updatedAtMs: Date.now(),
+            });
+            transaction.update(allocation.ref, {
+              fulfilledUnits: Number(allocation.data().fulfilledUnits || 0) + unitsToSubtract,
+              updatedAt: serverTimestamp(),
+              updatedAtMs: Date.now(),
+            });
           }
 
-          transaction.update(product.ref, {
-            stock: currentStock - unitsToSubtract,
-            regionalStock: {
-              ...(product.data().regionalStock || {}),
-              [regionId]: regionalStock - unitsToSubtract,
-            },
-            regionalStockUpdatedAtMs: Date.now(),
-            updatedAtMs: Date.now(),
-          });
-          transaction.update(allocation.ref, {
-            fulfilledUnits: Number(allocation.data().fulfilledUnits || 0) + unitsToSubtract,
-            updatedAt: serverTimestamp(),
-            updatedAtMs: Date.now(),
-          });
+          transaction.set(orderRef, orderPayload);
+        });
+      } catch (transactionError) {
+        if (!isFirestorePermissionDenied(transactionError)) {
+          throw transactionError;
         }
 
-        transaction.set(orderRef, orderPayload);
-      });
+        inventorySynced = false;
+        console.warn(
+          "Inventory stock transaction was denied by Firestore rules; saving the order without stock deduction.",
+          transactionError
+        );
+        await setDoc(orderRef, orderPayload);
+      }
 
       await sendOrderNotifications(orderRef.id, orderPayload, regionId);
 
       setLastOrder({
         id: orderRef.id,
         ...orderPayload,
+        inventorySynced,
       });
 
       goToScreen("success");

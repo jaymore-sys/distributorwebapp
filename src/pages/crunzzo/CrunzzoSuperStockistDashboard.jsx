@@ -93,6 +93,17 @@ function getOrderPartnerName(order) {
   );
 }
 
+function getOrderPurchaserName(order) {
+  return (
+    order?.shopName ||
+    order?.customerName ||
+    order?.buyerName ||
+    order?.storeName ||
+    order?.businessName ||
+    getOrderPartnerName(order)
+  );
+}
+
 function getOrderUnits(order) {
   const directUnits = Number(order?.totalUnits || 0);
   if (directUnits > 0) return directUnits;
@@ -360,14 +371,18 @@ export default function CrunzzoSuperStockistDashboard() {
 
     orders.slice(0, 8).forEach((order) => {
       const partnerName = getOrderPartnerName(order);
+      const purchaserName = getOrderPurchaserName(order);
       const totalUnits = getOrderUnits(order);
       const itemSummary = getOrderItemsSummary(order);
       const isRetailerPurchase = order.orderType === "retailer_purchase";
       const id = `order-${order.id}`;
-      const title = isRetailerPurchase ? "Retailer purchase in your region" : "Distributor sale in your region";
-      const message = `${order.partnerName || order.retailerName || order.distributorName || order.shopName || "Partner"} • ${formatRupees(order.total || 0)}`;
+      const title = isRetailerPurchase
+        ? `Retailer purchase: ${purchaserName}`
+        : `Distributor sale: ${purchaserName}`;
+      const message = [purchaserName, formatRupees(order.total || 0)].join(" - ");
       const detail = buildNotificationBody([
-        `Partner: ${partnerName}`,
+        `Purchased by: ${purchaserName}`,
+        partnerName !== purchaserName ? `Account: ${partnerName}` : "",
         `Region: ${order.region || userProfile?.region || "No region"}`,
         `Total: ${formatRupees(order.total || 0)}`,
         `Units: ${totalUnits}`,

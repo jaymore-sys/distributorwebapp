@@ -1,7 +1,7 @@
 export const CRUNZZO_REGIONS = [
   { id: "chennai", name: "Chennai" },
-  { id: "mumbai", name: "Mumbai" },
-  { id: "delhi", name: "Delhi" },
+  { id: "mumbai", name: "Coimbatore", aliases: ["mumbai"] },
+  { id: "delhi", name: "Puttur", aliases: ["delhi"] },
 ];
 
 export const CRUNZZO_REQUEST_STATUS = {
@@ -13,9 +13,15 @@ export const CRUNZZO_REQUEST_STATUS = {
 
 export function normalizeCrunzzoRegion(value, fallback = "Chennai") {
   const normalized = String(value || "").trim().toLowerCase();
-  const match = CRUNZZO_REGIONS.find(
-    (region) => normalized === region.id || normalized.includes(region.id)
-  );
+  const match = CRUNZZO_REGIONS.find((region) => {
+    const candidates = [region.id, region.name, ...(region.aliases || [])]
+      .map((item) => String(item || "").trim().toLowerCase())
+      .filter(Boolean);
+
+    return candidates.some(
+      (candidate) => normalized === candidate || normalized.includes(candidate)
+    );
+  });
 
   if (match) return match.name;
   return fallback;

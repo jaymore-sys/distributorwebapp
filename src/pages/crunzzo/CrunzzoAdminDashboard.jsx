@@ -41,6 +41,17 @@ import {
   subscribeToAppNotifications,
   syncComputedAppNotifications,
 } from "../../utils/appNotifications";
+import {
+  appendStockBatch,
+  buildStockBatch,
+  formatStockExpiryDate,
+  getExpiringStockBatches,
+  getNextStockExpiryBatch,
+  getTodayDateInputValue,
+  normalizeStockBatches,
+  parseStockExpiryDate,
+  reconcileStockBatchesToStock,
+} from "../../utils/crunzzoStockBatches";
 
 const { auth, db, storage } = getFirebaseServices("crunzzo");
 
@@ -149,6 +160,19 @@ function savePincodeCityCache(cache) {
   }
 }
 
+function validateStockExpiryDate(value) {
+  const expiry = parseStockExpiryDate(value);
+  if (!expiry) return "Please select a valid expiry date.";
+
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  if (expiry.getTime() < today.getTime()) {
+    return "Expiry date cannot be in the past.";
+  }
+
+  return "";
+}
+
 function readStoredIdMap(key) {
   if (typeof window === "undefined") return {};
   try {
@@ -232,6 +256,27 @@ function getSkuStats(orders) {
   });
 
   return Object.values(map).sort((a, b) => b.units - a.units || b.salesValue - a.salesValue);
+}
+
+function getOrderPartnerName(order) {
+  return (
+    order?.partnerName ||
+    order?.retailerName ||
+    order?.distributorName ||
+    order?.shopName ||
+    "Partner"
+  );
+}
+
+function getOrderPurchaserName(order) {
+  return (
+    order?.shopName ||
+    order?.customerName ||
+    order?.buyerName ||
+    order?.storeName ||
+    order?.businessName ||
+    getOrderPartnerName(order)
+  );
 }
 
 function getPincodeStats(orders) {
@@ -354,6 +399,7 @@ export default function CrunzzoAdminDashboard() {
 
   const [activeTab, setActiveTab] = useState("dashboard");
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
+  const [showAllPincodes, setShowAllPincodes] = useState(false);
   const [loading, setLoading] = useState(true);
   const [userProfile, setUserProfile] = useState(null);
 
@@ -415,6 +461,7 @@ export default function CrunzzoAdminDashboard() {
   const [editingProductId, setEditingProductId] = useState(null);
   const [editingProductForm, setEditingProductForm] = useState({});
   const [savingProductEdit, setSavingProductEdit] = useState(false);
+  const [stockExpiryModal, setStockExpiryModal] = useState(null);
 
   const goToTab = usePortalHistoryManager({
     portalKey: "crunzzo-admin",
@@ -618,6 +665,13 @@ export default function CrunzzoAdminDashboard() {
     });
   }, [products, topSku]);
   const pincodeStats = useMemo(() => getPincodeStats(orders), [orders]);
+  const visiblePincodeStats = useMemo(() => {
+    const rows = pincodeStats.length
+      ? pincodeStats
+      : [{ name: "No pincode sales yet", value: 0, percent: 10 }];
+
+    return showAllPincodes ? rows : rows.slice(0, 5);
+  }, [pincodeStats, showAllPincodes]);
 
   useEffect(() => {
     const pendingPincodes = pincodeStats
@@ -715,12 +769,8 @@ export default function CrunzzoAdminDashboard() {
     const alerts = [];
 
     orders.slice(0, 8).forEach((order) => {
-      const partnerName =
-        order.partnerName ||
-        order.retailerName ||
-        order.distributorName ||
-        order.shopName ||
-        "Partner";
+      const partnerName = getOrderPartnerName(order);
+      const purchaserName = getOrderPurchaserName(order);
       const orderItems = Array.isArray(order.items) ? order.items : [];
       const totalUnits =
         Number(order.totalUnits || 0) ||
@@ -736,10 +786,13 @@ export default function CrunzzoAdminDashboard() {
         : "No item details saved";
 
       const id = `order-${order.id}`;
-      const title = isRetailerOrder(order) ? "Retailer purchase recorded" : "Distributor sale recorded";
-      const message = `${order.partnerName || order.retailerName || order.distributorName || order.shopName || "Partner"} • ${order.region || "No region"} • ${formatRupees(order.total || 0)}`;
+      const title = isRetailerOrder(order)
+        ? `Retailer purchase: ${purchaserName}`
+        : `Distributor sale: ${purchaserName}`;
+      const message = [purchaserName, order.region || "No region", formatRupees(order.total || 0)].join(" - ");
       const detail = buildNotificationBody([
-          `Partner: ${partnerName}`,
+        `Purchased by: ${purchaserName}`,
+        partnerName !== purchaserName ? `Account: ${partnerName}` : "",
           `Region: ${order.region || "No region"}`,
           `Total: ${formatRupees(order.total || 0)}`,
           `Units: ${totalUnits}`,
@@ -804,6 +857,35 @@ export default function CrunzzoAdminDashboard() {
         pushEnabled: true,
         time: "Inventory",
         createdAtMs: Number(product.updatedAtMs || product.createdAtMs || 0),
+      });
+    });
+
+    const nowMs = Date.now();
+    products.forEach((product) => {
+      getExpiringStockBatches(product, nowMs).forEach((batch) => {
+        const remainingUnits = Number(batch.remainingUnits || 0);
+        const daysText = batch.expired
+          ? `${Math.abs(batch.daysUntilExpiry)} day${Math.abs(batch.daysUntilExpiry) === 1 ? "" : "s"} expired`
+          : batch.daysUntilExpiry === 0
+            ? "expires today"
+            : `${batch.daysUntilExpiry} day${batch.daysUntilExpiry === 1 ? "" : "s"} left`;
+
+        alerts.push({
+          id: `expiry-${product.id}-${batch.id}`,
+          tone: batch.expired ? BRAND : "#b45309",
+          title: batch.expired ? "Stock expired" : "Stock nearing expiry",
+          message: `${product.name || "Product"} has ${remainingUnits} units ${daysText}.`,
+          detail: [
+            `Product: ${product.name || "Product"}`,
+            `SKU: ${product.skuCode || "-"}`,
+            `Batch units remaining: ${remainingUnits}`,
+            `Expiry date: ${formatStockExpiryDate(batch.expiryDate)}`,
+            `Status: ${batch.expired ? "Expired" : daysText}`,
+            "Action: Prioritize this stock or reduce allocation before expiry.",
+          ].join("\n"),
+          time: batch.expired ? "Expired" : "Expiry",
+          createdAtMs: nowMs + (batch.expired ? 1000000 : 0) - Math.max(0, batch.daysUntilExpiry),
+        });
       });
     });
 
@@ -957,12 +1039,12 @@ export default function CrunzzoAdminDashboard() {
     });
   }, [loadedAllocationRegions, products, regionalAllocations, userProfile]);
 
-  const getAllocationDraftValue = (regionId, productId) => {
+  const getAllocationRemainingDraftValue = (regionId, productId) => {
     const key = `${productId}_${regionId}`;
     if (Object.prototype.hasOwnProperty.call(allocationDrafts, key)) {
       return allocationDrafts[key];
     }
-    return String(getAllocationForRegion(regionId, productId)?.allocatedUnits || 0);
+    return String(getRegionalRemainingUnits(getAllocationForRegion(regionId, productId)));
   };
 
   const filteredAllocationProducts = useMemo(() => {
@@ -990,36 +1072,45 @@ export default function CrunzzoAdminDashboard() {
     }));
   };
 
+  const clearAllocationRemainingDrafts = (productId) => {
+    setAllocationMessage("");
+    setAllocationErrorModal(null);
+    setAllocationDrafts((previous) => {
+      const next = { ...previous };
+      CRUNZZO_REGIONS.forEach((region) => {
+        next[`${productId}_${region.id}`] = "0";
+      });
+      return next;
+    });
+  };
+
   const saveRegionalAllocation = async (product) => {
     const proposedAllocations = CRUNZZO_REGIONS.map((region) => {
       const current = getAllocationForRegion(region.id, product.id) || {};
+      const remainingUnits = Number(getAllocationRemainingDraftValue(region.id, product.id) || 0);
+      const fulfilledUnits = Number(current.fulfilledUnits || 0);
       return {
         region,
-        allocatedUnits: Number(getAllocationDraftValue(region.id, product.id) || 0),
-        fulfilledUnits: Number(current.fulfilledUnits || 0),
+        remainingUnits,
+        fulfilledUnits,
+        allocatedUnits: fulfilledUnits + remainingUnits,
       };
     });
     const invalidAllocation = proposedAllocations.find(
-      (item) => !Number.isInteger(item.allocatedUnits) || item.allocatedUnits < 0
-    );
-    const belowFulfilled = proposedAllocations.find(
-      (item) => item.allocatedUnits < item.fulfilledUnits
+      (item) => !Number.isInteger(item.remainingUnits) || item.remainingUnits < 0
     );
 
-    if (invalidAllocation || belowFulfilled) {
-      const message = invalidAllocation
-        ? `${invalidAllocation.region.name} allocation must be a whole number.`
-        : `${belowFulfilled.region.name} allocation cannot be lower than ${belowFulfilled.fulfilledUnits} fulfilled units.`;
+    if (invalidAllocation) {
       setAllocationErrorModal({
         title: "Unable to Save Allocation",
-        message,
+        message: `${invalidAllocation.region.name} remaining stock must be a whole number.`,
         productName: product.name || "Selected product",
       });
       return;
     }
 
     const proposedRemainingTotal = proposedAllocations.reduce(
-      (sum, item) => sum + Math.max(0, item.allocatedUnits - item.fulfilledUnits),
+      (sum, item) => sum + item.remainingUnits,
       0
     );
     const visibleCentralStock = Number(product.stock || 0);
@@ -1069,23 +1160,19 @@ export default function CrunzzoAdminDashboard() {
           const current = allocationSnapshots[index].exists()
             ? allocationSnapshots[index].data()
             : {};
-          const allocatedUnits = Number(getAllocationDraftValue(entry.region.id, product.id) || 0);
+          const remainingUnits = Number(getAllocationRemainingDraftValue(entry.region.id, product.id) || 0);
           const fulfilledUnits = Number(current.fulfilledUnits || 0);
+          const allocatedUnits = fulfilledUnits + remainingUnits;
 
-          if (!Number.isInteger(allocatedUnits) || allocatedUnits < 0) {
-            throw new Error(`${entry.region.name} allocation must be a whole number.`);
-          }
-          if (allocatedUnits < fulfilledUnits) {
-            throw new Error(
-              `${entry.region.name} allocation cannot be lower than ${fulfilledUnits} fulfilled units.`
-            );
+          if (!Number.isInteger(remainingUnits) || remainingUnits < 0) {
+            throw new Error(`${entry.region.name} remaining stock must be a whole number.`);
           }
 
-          return { ...entry, allocatedUnits, fulfilledUnits };
+          return { ...entry, allocatedUnits, fulfilledUnits, remainingUnits };
         });
 
         const totalRemainingAllocation = nextAllocations.reduce(
-          (sum, item) => sum + Math.max(0, item.allocatedUnits - item.fulfilledUnits),
+          (sum, item) => sum + item.remainingUnits,
           0
         );
 
@@ -1106,7 +1193,7 @@ export default function CrunzzoAdminDashboard() {
           regionalStock: Object.fromEntries(
             nextAllocations.map((item) => [
               item.region.id,
-              Math.max(0, item.allocatedUnits - item.fulfilledUnits),
+              item.remainingUnits,
             ])
           ),
           regionalStockUpdatedAtMs: Date.now(),
@@ -1309,23 +1396,50 @@ export default function CrunzzoAdminDashboard() {
     setZoneInput("");
   };
 
-  const handleSaveProduct = async () => {
+  const validateNewProductForm = () => {
     if (!productForm.name.trim()) {
       setProductMessage("Please enter product name.");
-      return;
+      return null;
     }
 
     const packOptions = buildCrunzzoPackOptionsFromForm(productForm);
     const invalidPack = packOptions.find((pack) => Number(pack.rate || 0) <= 0);
     if (invalidPack) {
       setProductMessage(`Please enter price for ${invalidPack.label}.`);
-      return;
+      return null;
     }
 
     if (!imageFile) {
       setProductMessage("Please upload a product image.");
+      return null;
+    }
+
+    return packOptions;
+  };
+
+  const handleSaveProduct = async () => {
+    const packOptions = validateNewProductForm();
+    if (!packOptions) return;
+
+    const totalStockUnits = getCrunzzoTotalUnits(packOptions);
+    if (totalStockUnits > 0) {
+      setStockExpiryModal({
+        mode: "create",
+        productName: productForm.name.trim(),
+        skuCode: productForm.skuCode.trim(),
+        addedUnits: totalStockUnits,
+        expiryDate: "",
+        error: "",
+      });
       return;
     }
+
+    await commitNewProduct("");
+  };
+
+  const commitNewProduct = async (expiryDate) => {
+    const packOptions = validateNewProductForm();
+    if (!packOptions) return false;
 
     try {
       setSavingProduct(true);
@@ -1343,6 +1457,16 @@ export default function CrunzzoAdminDashboard() {
       const totalStockUnits = getCrunzzoTotalUnits(packOptions);
       const primaryPack = packOptions[0];
       const retailerOfferPercent = Math.min(100, Number(productForm.retailerOfferPercent || 0));
+      const stockBatches = totalStockUnits > 0
+        ? [
+            buildStockBatch({
+              productName: productForm.name.trim(),
+              skuCode: productForm.skuCode.trim(),
+              units: totalStockUnits,
+              expiryDate,
+            }),
+          ]
+        : [];
 
       await addDoc(collection(db, "products"), {
         name: productForm.name.trim(),
@@ -1361,6 +1485,7 @@ export default function CrunzzoAdminDashboard() {
         zones: productForm.zones,
         packSellingMode: "fixed-packs",
         packOptions,
+        stockBatches,
         imageUrl,
         status: "active",
         createdAt: serverTimestamp(),
@@ -1370,9 +1495,11 @@ export default function CrunzzoAdminDashboard() {
       setProductMessage("Product saved successfully.");
       resetProductForm();
       goToTab("inventory");
+      return true;
     } catch (error) {
       console.error("Save product failed:", error);
       setProductMessage("Failed to save product.");
+      return false;
     } finally {
       setSavingProduct(false);
     }
@@ -1434,28 +1561,31 @@ export default function CrunzzoAdminDashboard() {
     }));
   };
 
-  const handleSaveProductEdit = async (product) => {
+  const getProductEditPayload = (product) => {
     const nextName = (editingProductForm.name || "").trim();
     const packOptions = buildCrunzzoPackOptionsFromForm(editingProductForm);
     const invalidPack = packOptions.find((pack) => Number(pack.rate || 0) <= 0);
 
     if (!nextName) {
       alert("Please enter product name.");
-      return;
+      return null;
     }
 
     if (invalidPack) {
       alert(`Please enter price for ${invalidPack.label}.`);
-      return;
+      return null;
     }
 
-    try {
-      setSavingProductEdit(true);
-      const totalStockUnits = toNumber(editingProductForm.stock, 0);
-      const primaryPack = packOptions[0];
-      const retailerOfferPercent = Math.min(100, Number(editingProductForm.retailerOfferPercent || 0));
+    const totalStockUnits = toNumber(editingProductForm.stock, 0);
+    const currentStockUnits = getCrunzzoTotalUnits(product);
+    const primaryPack = packOptions[0];
+    const retailerOfferPercent = Math.min(100, Number(editingProductForm.retailerOfferPercent || 0));
 
-      const updatePayload = {
+    return {
+      totalStockUnits,
+      currentStockUnits,
+      stockIncrease: Math.max(0, totalStockUnits - currentStockUnits),
+      updatePayload: {
         name: nextName,
         category: editingProductForm.category || "Chips",
         skuCode: editingProductForm.skuCode || "",
@@ -1470,15 +1600,98 @@ export default function CrunzzoAdminDashboard() {
         packSellingMode: "fixed-packs",
         packOptions,
         updatedAtMs: Date.now(),
-      };
+      },
+    };
+  };
 
-      await updateDoc(doc(db, "products", product.id), updatePayload);
+  const handleSaveProductEdit = async (product) => {
+    const editData = getProductEditPayload(product);
+    if (!editData) return;
+
+    if (editData.stockIncrease > 0) {
+      setStockExpiryModal({
+        mode: "edit",
+        product,
+        productName: editingProductForm.name || product.name || "Product",
+        skuCode: editingProductForm.skuCode || product.skuCode || "",
+        addedUnits: editData.stockIncrease,
+        expiryDate: "",
+        error: "",
+      });
+      return;
+    }
+
+    await commitProductEdit(product, "");
+  };
+
+  const commitProductEdit = async (product, expiryDate) => {
+    const editData = getProductEditPayload(product);
+    if (!editData) return false;
+
+    try {
+      setSavingProductEdit(true);
+      let nextStockBatches = reconcileStockBatchesToStock(
+        product.stockBatches || [],
+        Math.min(editData.currentStockUnits, editData.totalStockUnits)
+      );
+
+      if (editData.stockIncrease > 0) {
+        nextStockBatches = appendStockBatch(
+          nextStockBatches,
+          buildStockBatch({
+            productId: product.id,
+            productName: editData.updatePayload.name,
+            skuCode: editData.updatePayload.skuCode,
+            units: editData.stockIncrease,
+            expiryDate,
+          })
+        );
+      }
+
+      nextStockBatches = reconcileStockBatchesToStock(
+        nextStockBatches,
+        editData.totalStockUnits
+      );
+
+      await updateDoc(doc(db, "products", product.id), {
+        ...editData.updatePayload,
+        stockBatches: nextStockBatches,
+      });
       cancelProductEdit();
+      return true;
     } catch (error) {
       console.error("Product update failed. Payload:", error);
       alert(`Update Failed: ${error.code || "Error"}. ${error.message}`);
+      return false;
     } finally {
       setSavingProductEdit(false);
+    }
+  };
+
+  const closeStockExpiryModal = () => {
+    if (savingProduct || savingProductEdit) return;
+    setStockExpiryModal(null);
+  };
+
+  const handleStockExpirySubmit = async (event) => {
+    event.preventDefault();
+    if (!stockExpiryModal) return;
+
+    const expiryError = validateStockExpiryDate(stockExpiryModal.expiryDate);
+    if (expiryError) {
+      setStockExpiryModal((previous) => ({
+        ...previous,
+        error: expiryError,
+      }));
+      return;
+    }
+
+    const saved = stockExpiryModal.mode === "create"
+      ? await commitNewProduct(stockExpiryModal.expiryDate)
+      : await commitProductEdit(stockExpiryModal.product, stockExpiryModal.expiryDate);
+
+    if (saved) {
+      setStockExpiryModal(null);
     }
   };
 
@@ -1868,11 +2081,27 @@ export default function CrunzzoAdminDashboard() {
                     <div style={{ fontSize: 16, fontWeight: 800, color: TEXT }}>Sales by Pincode</div>
                     <div style={{ fontSize: 12, color: MUTED }}>Monthly pincode distribution</div>
                   </div>
-                  <div style={{ fontSize: 13, fontWeight: 700, color: BRAND }}>Maps ⌃</div>
+                  {pincodeStats.length > 5 ? (
+                    <button
+                      type="button"
+                      onClick={() => setShowAllPincodes((current) => !current)}
+                      style={{
+                        border: "none",
+                        background: "transparent",
+                        color: BRAND,
+                        fontSize: 13,
+                        fontWeight: 800,
+                        cursor: "pointer",
+                        padding: 0,
+                      }}
+                    >
+                      {showAllPincodes ? "Show Less" : "View All"}
+                    </button>
+                  ) : null}
                 </div>
 
                 <div style={{ display: "grid", gap: 12 }}>
-                  {(pincodeStats.length ? pincodeStats : [{ name: "No pincode sales yet", value: 0, percent: 10 }]).map((item) => (
+                  {visiblePincodeStats.map((item) => (
                     <div key={item.name}>
                       <div
                         style={{
@@ -2215,7 +2444,7 @@ export default function CrunzzoAdminDashboard() {
                   Notifications
                 </h1>
                 <p style={{ margin: "4px 0 0", fontSize: 12, color: MUTED }}>
-                  Recent orders, low stock, and no-full-pack alerts.
+                  Recent orders, low stock, expiry, and no-full-pack alerts.
                 </p>
               </div>
 
@@ -2292,7 +2521,7 @@ export default function CrunzzoAdminDashboard() {
                   Regional Inventory Allocation
                 </h1>
                 <p style={{ margin: "4px 0 0", fontSize: 12, color: MUTED }}>
-                  Allocate central Crunzzo units across Chennai, Mumbai, and Delhi.
+                  Allocate central Crunzzo units across Chennai, Coimbatore, and Puttur.
                 </p>
               </div>
 
@@ -2337,7 +2566,7 @@ export default function CrunzzoAdminDashboard() {
               </div>
 
               <div style={{ margin: "-4px 2px 12px", color: MUTED, fontSize: 11, fontWeight: 700 }}>
-                {filteredAllocationProducts.length} product{filteredAllocationProducts.length === 1 ? "" : "s"} shown. Select a product to manage its allocation.
+                {filteredAllocationProducts.length} product{filteredAllocationProducts.length === 1 ? "" : "s"} shown. Enter remaining sellable stock; fulfilled units are preserved automatically.
               </div>
 
               {allocationMessage ? (
@@ -2426,10 +2655,11 @@ export default function CrunzzoAdminDashboard() {
                                     <small style={{ display: "block", color: MUTED, marginTop: 3 }}>{fulfilled} fulfilled / {remaining} remaining</small>
                                   </div>
                                   <input
-                                    value={getAllocationDraftValue(region.id, product.id)}
+                                    value={getAllocationRemainingDraftValue(region.id, product.id)}
                                     onChange={(event) => handleAllocationDraft(product.id, region.id, event.target.value)}
                                     inputMode="numeric"
-                                    aria-label={`${region.name} allocation for ${product.name}`}
+                                    aria-label={`${region.name} remaining stock for ${product.name}`}
+                                    title="Remaining stock available in this region"
                                     style={{ width: "100%", height: 42, border: `1px solid ${BORDER}`, borderRadius: 11, padding: "0 12px", fontWeight: 800, boxSizing: "border-box" }}
                                   />
                                 </div>
@@ -2439,9 +2669,18 @@ export default function CrunzzoAdminDashboard() {
 
                           <button
                             type="button"
+                            onClick={() => clearAllocationRemainingDrafts(product.id)}
+                            disabled={savingAllocationId === product.id}
+                            style={{ marginTop: 14, width: "100%", height: 38, border: `1px solid ${BORDER}`, borderRadius: 11, background: "#fff", color: BRAND, fontWeight: 900, cursor: "pointer", opacity: savingAllocationId === product.id ? 0.6 : 1 }}
+                          >
+                            Set All Remaining to 0
+                          </button>
+
+                          <button
+                            type="button"
                             onClick={() => saveRegionalAllocation(product)}
                             disabled={savingAllocationId === product.id}
-                            style={{ marginTop: 14, width: "100%", height: 42, border: "none", borderRadius: 11, background: BRAND, color: "#fff", fontWeight: 900, cursor: "pointer", opacity: savingAllocationId === product.id ? 0.6 : 1 }}
+                            style={{ marginTop: 8, width: "100%", height: 42, border: "none", borderRadius: 11, background: BRAND, color: "#fff", fontWeight: 900, cursor: "pointer", opacity: savingAllocationId === product.id ? 0.6 : 1 }}
                           >
                             {savingAllocationId === product.id ? "Saving..." : "Save Regional Allocation"}
                           </button>
@@ -3126,6 +3365,9 @@ export default function CrunzzoAdminDashboard() {
                     const totalUnits = getCrunzzoTotalUnits(item);
                     const lowStock = isCrunzzoLowStock(item);
                     const isEditing = editingProductId === item.id;
+                    const nextExpiryBatch = getNextStockExpiryBatch(item);
+                    const expiringBatchCount = getExpiringStockBatches(item).length;
+                    const trackedBatchCount = normalizeStockBatches(item).length;
                     const retailerOfferPercent = Math.min(
                       100,
                       Number(item.retailerOfferPercent ?? item.offerPercent ?? 0)
@@ -3203,6 +3445,23 @@ export default function CrunzzoAdminDashboard() {
                             >
                               {totalUnits} units total {lowStock ? "• LOW STOCK" : ""}
                             </div>
+                            {nextExpiryBatch ? (
+                              <div
+                                style={{
+                                  fontSize: 11,
+                                  color: expiringBatchCount ? "#b45309" : MUTED,
+                                  marginTop: 5,
+                                  fontWeight: 800,
+                                }}
+                              >
+                                Next expiry: {formatStockExpiryDate(nextExpiryBatch.expiryDate)}
+                                {expiringBatchCount ? ` - ${expiringBatchCount} alert${expiringBatchCount === 1 ? "" : "s"}` : ""}
+                              </div>
+                            ) : trackedBatchCount ? null : (
+                              <div style={{ fontSize: 11, color: MUTED, marginTop: 5 }}>
+                                No expiry batch recorded
+                              </div>
+                            )}
                           </div>
 
                           <div style={{ gridColumn: "1 / -1", textAlign: "left" }}>
@@ -3771,6 +4030,98 @@ export default function CrunzzoAdminDashboard() {
               Close
             </button>
           </div>
+        </div>
+      ) : null}
+
+      {stockExpiryModal ? (
+        <div
+          className="crz-logout-overlay"
+          role="presentation"
+          onClick={closeStockExpiryModal}
+        >
+          <form
+            className="crz-logout-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="stock-expiry-title"
+            onClick={(event) => event.stopPropagation()}
+            onSubmit={handleStockExpirySubmit}
+            style={{ textAlign: "left", maxWidth: 380 }}
+          >
+            <h3 id="stock-expiry-title" style={{ marginBottom: 6 }}>
+              Set Stock Expiry Date
+            </h3>
+            <p style={{ margin: "0 0 14px", color: MUTED, fontSize: 12, lineHeight: 1.45 }}>
+              {stockExpiryModal.mode === "create" ? "This new product stock" : "The added stock"} needs an expiry date before it is saved.
+            </p>
+
+            <div
+              style={{
+                border: `1px solid ${BORDER}`,
+                background: "#fafafa",
+                borderRadius: 14,
+                padding: 12,
+                marginBottom: 14,
+              }}
+            >
+              <div style={{ fontSize: 13, fontWeight: 900, color: TEXT }}>
+                {stockExpiryModal.productName || "Product"}
+              </div>
+              <div style={{ marginTop: 5, fontSize: 12, color: MUTED }}>
+                {stockExpiryModal.skuCode || "No SKU"} - {stockExpiryModal.addedUnits} units added
+              </div>
+            </div>
+
+            <label style={{ display: "grid", gap: 6, fontSize: 12, fontWeight: 900, color: TEXT }}>
+              Expiry Date
+              <input
+                type="date"
+                value={stockExpiryModal.expiryDate}
+                min={getTodayDateInputValue()}
+                onChange={(event) =>
+                  setStockExpiryModal((previous) => ({
+                    ...previous,
+                    expiryDate: event.target.value,
+                    error: "",
+                  }))
+                }
+                style={{
+                  height: 44,
+                  borderRadius: 12,
+                  border: `1px solid ${stockExpiryModal.error ? BRAND : BORDER}`,
+                  padding: "0 12px",
+                  outline: "none",
+                  color: TEXT,
+                  fontWeight: 800,
+                  background: "#fff",
+                }}
+              />
+            </label>
+
+            {stockExpiryModal.error ? (
+              <div style={{ marginTop: 8, color: BRAND, fontSize: 12, fontWeight: 800 }}>
+                {stockExpiryModal.error}
+              </div>
+            ) : null}
+
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 16 }}>
+              <button
+                type="button"
+                className="crz-logout-cancel"
+                onClick={closeStockExpiryModal}
+                disabled={savingProduct || savingProductEdit}
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                className="crz-logout-confirm czd-logout-confirm"
+                disabled={savingProduct || savingProductEdit}
+              >
+                {savingProduct || savingProductEdit ? "Saving..." : "Save Stock"}
+              </button>
+            </div>
+          </form>
         </div>
       ) : null}
 
