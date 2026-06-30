@@ -1,0 +1,163 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function hasUserDoc() {
+      return signedIn() &&
+        exists(/databases/$(database)/documents/users/$(request.auth.uid));
+    }
+
+    function getUserData() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function userRole() {
+      return hasUserDoc() ? getUserData().role : "";
+    }
+
+    function isAdmin() {
+      return userRole() == "admin" || userRole() == "Admin";
+    }
+
+    function isDistributor() {
+      return userRole() == "distributor" || userRole() == "Distributor";
+    }
+
+    function isRetailer() {
+      return userRole() == "retailer" || userRole() == "Retailer";
+    }
+
+    function isSuperStockist() {
+      return userRole() == "super_stockist" || userRole() == "Super Stockist";
+    }
+
+    function isRegionalSeller() {
+      return isDistributor() || isRetailer();
+    }
+
+    function userRegion() {
+      return hasUserDoc() ? getUserData().region : "";
+    }
+
+    function isUserRegion(regionId) {
+      return userRegion() == regionId ||
+        resource.data.region == userRegion() ||
+        resource.data.regionId == userRegion();
+    }
+
+    function stockDeductionProductKeys() {
+      return [
+        "stock",
+        "stockBatches",
+        "updatedAtMs",
+        "packOptions",
+        "openingStock",
+        "regionalStock",
+        "regionalStockUpdatedAtMs"
+      ];
+    }
+
+    match /users/{userId} {
+      allow create: if signedIn() && request.auth.uid == userId;
+
+      allow read: if signedIn() && (
+        request.auth.uid == userId ||
+        isAdmin() ||
+        isSuperStockist()
+      );
+
+      allow update: if signedIn() && (
+        request.auth.uid == userId ||
+        isAdmin()
+      );
+
+      allow delete: if isAdmin();
+    }
+
+    match /products/{productId} {
+      allow read: if signedIn();
+
+      allow create, delete: if isAdmin();
+
+      allow update: if isAdmin() || (
+        isDistributor() &&
+        request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(stockDeductionProductKeys())
+      ) || (
+        isRetailer() &&
+        request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(stockDeductionProductKeys())
+      );
+    }
+
+    match /orders/{orderId} {
+      allow create: if (
+        isDistributor() &&
+        request.resource.data.distributorUid == request.auth.uid
+      ) || (
+        isRetailer() &&
+        request.resource.data.retailerUid == request.auth.uid
+      );
+
+      allow read: if isAdmin() ||
+        isSuperStockist() ||
+        (signedIn() && resource.data.distributorUid == request.auth.uid) ||
+        (signedIn() && resource.data.retailerUid == request.auth.uid) ||
+        (
+          isDistributor() &&
+          resource.data.orderType == "retailer_purchase" &&
+          resource.data.region == getUserData().region
+        );
+
+      allow update, delete: if isAdmin();
+    }
+
+    match /regional_inventory/{regionId}/products/{productId} {
+      allow read: if isAdmin() ||
+        isSuperStockist() ||
+        isRegionalSeller();
+
+      allow create, delete: if isAdmin();
+
+      allow update: if isAdmin() || (
+        isRegionalSeller() &&
+        isUserRegion(regionId) &&
+        request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly([
+            "fulfilledUnits",
+            "updatedAt",
+            "updatedAtMs"
+          ]) &&
+        request.resource.data.fulfilledUnits is number &&
+        request.resource.data.fulfilledUnits >= resource.data.fulfilledUnits
+      );
+    }
+
+    match /app_notifications/{notificationId} {
+      allow read: if isAdmin() ||
+        (
+          signedIn() &&
+          (
+            request.auth.uid in resource.data.targetUids ||
+            userRole() in resource.data.targetRoles ||
+            (
+              resource.data.regionId != "" &&
+              resource.data.regionId == userRegion()
+            )
+          )
+        );
+
+      allow create: if isAdmin() || isRegionalSeller() || isSuperStockist();
+
+      allow update: if signedIn() &&
+        request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(["readBy", "viewedBy"]);
+
+      allow delete: if isAdmin();
+    }
+  }
+}

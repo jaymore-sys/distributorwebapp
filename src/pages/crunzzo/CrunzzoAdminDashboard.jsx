@@ -1532,6 +1532,7 @@ export default function CrunzzoAdminDashboard() {
       category: product.category || "Chips",
       skuCode: product.skuCode || "",
       stock: totalUnits ? String(totalUnits) : "",
+      addStockUnits: "",
       gst: firstPack.gst ? String(firstPack.gst) : "",
       lowStockThreshold: product.lowStockThreshold ? String(product.lowStockThreshold) : "",
       retailerOfferPercent: String(product.retailerOfferPercent ?? product.offerPercent ?? 0),
@@ -1624,6 +1625,76 @@ export default function CrunzzoAdminDashboard() {
     await commitProductEdit(product, "");
   };
 
+  const handleAddProductStock = (product) => {
+    const addedUnits = toNumber(editingProductForm.addStockUnits, 0);
+    if (!Number.isInteger(addedUnits) || addedUnits <= 0) {
+      alert("Please enter stock units to add.");
+      return;
+    }
+
+    setStockExpiryModal({
+      mode: "add-stock",
+      product,
+      productName: editingProductForm.name || product.name || "Product",
+      skuCode: editingProductForm.skuCode || product.skuCode || "",
+      addedUnits,
+      expiryDate: "",
+      error: "",
+    });
+  };
+
+  const commitProductStockAddition = async (product, addedUnits, expiryDate) => {
+    const safeAddedUnits = toNumber(addedUnits, 0);
+    if (!Number.isInteger(safeAddedUnits) || safeAddedUnits <= 0) return false;
+
+    try {
+      setSavingProductEdit(true);
+
+      let nextTotalStock = 0;
+      await runTransaction(db, async (transaction) => {
+        const productRef = doc(db, "products", product.id);
+        const productSnapshot = await transaction.get(productRef);
+
+        if (!productSnapshot.exists()) {
+          throw new Error("Product no longer exists.");
+        }
+
+        const productData = productSnapshot.data();
+        const currentStock = getCrunzzoTotalUnits(productData);
+        nextTotalStock = currentStock + safeAddedUnits;
+        const nextStockBatches = appendStockBatch(
+          normalizeStockBatches(productData.stockBatches || []),
+          buildStockBatch({
+            productId: product.id,
+            productName: editingProductForm.name || productData.name || product.name || "",
+            skuCode: editingProductForm.skuCode || productData.skuCode || product.skuCode || "",
+            units: safeAddedUnits,
+            expiryDate,
+          })
+        );
+
+        transaction.update(productRef, {
+          stock: nextTotalStock,
+          stockBatches: nextStockBatches,
+          updatedAtMs: Date.now(),
+        });
+      });
+
+      setEditingProductForm((previous) => ({
+        ...previous,
+        stock: String(nextTotalStock),
+        addStockUnits: "",
+      }));
+      return true;
+    } catch (error) {
+      console.error("Add product stock failed:", error);
+      alert(`Stock update failed: ${error.code || "Error"}. ${error.message}`);
+      return false;
+    } finally {
+      setSavingProductEdit(false);
+    }
+  };
+
   const commitProductEdit = async (product, expiryDate) => {
     const editData = getProductEditPayload(product);
     if (!editData) return false;
@@ -1688,7 +1759,13 @@ export default function CrunzzoAdminDashboard() {
 
     const saved = stockExpiryModal.mode === "create"
       ? await commitNewProduct(stockExpiryModal.expiryDate)
-      : await commitProductEdit(stockExpiryModal.product, stockExpiryModal.expiryDate);
+      : stockExpiryModal.mode === "add-stock"
+        ? await commitProductStockAddition(
+            stockExpiryModal.product,
+            stockExpiryModal.addedUnits,
+            stockExpiryModal.expiryDate
+          )
+        : await commitProductEdit(stockExpiryModal.product, stockExpiryModal.expiryDate);
 
     if (saved) {
       setStockExpiryModal(null);
@@ -3629,7 +3706,7 @@ export default function CrunzzoAdminDashboard() {
                               }}
                             >
                               <label style={{ display: "grid", gap: 5, fontSize: 11, fontWeight: 800, color: TEXT }}>
-                                Stock
+                                Current Stock
                                 <input
                                   name="stock"
                                   value={editingProductForm.stock ?? ""}
@@ -3649,6 +3726,57 @@ export default function CrunzzoAdminDashboard() {
                                   }}
                                 />
                               </label>
+                              <div style={{ display: "grid", gap: 5, fontSize: 11, fontWeight: 800, color: TEXT }}>
+                                Add Stock
+                                <div
+                                  style={{
+                                    display: "grid",
+                                    gridTemplateColumns: "minmax(0, 1fr) auto",
+                                    gap: 6,
+                                    width: "100%",
+                                  }}
+                                >
+                                  <input
+                                    name="addStockUnits"
+                                    value={editingProductForm.addStockUnits ?? ""}
+                                    onChange={handleProductEditInput}
+                                    placeholder="+100"
+                                    inputMode="numeric"
+                                    style={{
+                                      width: "100%",
+                                      minWidth: 0,
+                                      boxSizing: "border-box",
+                                      height: 38,
+                                      borderRadius: 10,
+                                      border: `1px solid ${BORDER}`,
+                                      padding: "0 10px",
+                                      outline: "none",
+                                      background: "#fff",
+                                      fontWeight: 700,
+                                    }}
+                                  />
+                                  <button
+                                    type="button"
+                                    onClick={() => handleAddProductStock(item)}
+                                    disabled={savingProductEdit}
+                                    style={{
+                                      height: 38,
+                                      minWidth: 54,
+                                      padding: "0 10px",
+                                      borderRadius: 10,
+                                      border: "none",
+                                      background: BRAND,
+                                      color: "#fff",
+                                      fontSize: 11,
+                                      fontWeight: 900,
+                                      cursor: savingProductEdit ? "not-allowed" : "pointer",
+                                      whiteSpace: "nowrap",
+                                    }}
+                                  >
+                                    ADD
+                                  </button>
+                                </div>
+                              </div>
                               <label style={{ display: "grid", gap: 5, fontSize: 11, fontWeight: 800, color: TEXT }}>
                                 GST %
                                 <input
